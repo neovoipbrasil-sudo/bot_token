@@ -37,13 +37,14 @@ O Bot Server é um processo HTTP novo e independente do servidor MCP atual (que 
 
 ## Componentes
 
-1. **`src/bot/register.js`** — script executado manualmente uma única vez (ou ao reconfigurar) que chama `imbot.register` no Bitrix24, apontando os eventos `ONIMBOTMESSAGEADD` e `ONIMBOTJOINCHAT` para a URL pública do Bot Server.
+1. **`src/bot/register.js`** — script executado manualmente uma única vez (ou ao reconfigurar). **Premissa não validada, a confirmar como primeiro passo do plano de implementação:** que o `B24_DEFAULT_WEBHOOK` já usado pelo MCP (com o escopo `imbot` habilitado) é suficiente para chamar `imbot.register` e para obter o `application_token` via `app.info` — a API do Bitrix24 pode em vez disso exigir uma aplicação REST local instalada (`client_id`/`client_secret`). Enquanto essa premissa não é confirmada contra o portal real, o restante desta seção descreve o comportamento **assumindo que funciona por incoming webhook**; se não funcionar, `register.js` falha com mensagem clara e o design precisa ser revisto antes de prosseguir.
+   - Assumindo a premissa válida: `register.js` chama `imbot.register` com os campos obrigatórios (`CODE`, `TYPE=B`, `EVENT_HANDLER` apontando para a URL pública do Bot Server, `PROPERTIES[NAME]`), registra os eventos `ONIMBOTMESSAGEADD` e `ONIMBOTJOINCHAT`, e persiste `BOT_ID` + `application_token` (obtido via `app.info`) em `src/bot/bot-config.json`, lido por `server.js` e `reply.js`.
 
-2. **`src/bot/server.js`** — servidor HTTP com endpoint `POST /bitrix-events`. Valida o `application_token` enviado pelo Bitrix24 em cada evento e despacha mensagens válidas para o handler.
+2. **`src/bot/server.js`** — servidor HTTP com endpoint `POST /bitrix-events`. Todo evento do Bitrix24 traz um campo `auth.application_token` no payload; `server.js` compara esse valor com o persistido em `bot-config.json` (obtido no registro) e descarta com HTTP 403 qualquer requisição sem correspondência exata.
 
 3. **`src/bot/agent-loop.js`** — núcleo de interpretação. Recebe o texto da mensagem, o histórico curto do chat e a memória de longo prazo do usuário; chama a API da Claude com as ferramentas adaptadas dos schemas `zod` já definidos em `src/tools/*.js`. Decide se a ação é leitura (executa direto) ou escrita (monta resumo e aciona confirmação). Se faltar informação para montar a ação com segurança, pergunta ao usuário em vez de adivinhar.
 
-4. **`src/bot/pending-actions.js`** — armazenamento local (arquivo JSON ou SQLite) das ações aguardando confirmação, chaveado por chat_id, com expiração (10 minutos). Uma pendência expirada é tratada como inexistente na próxima mensagem.
+4. **`src/bot/pending-actions.js`** — armazenamento local (arquivo JSON ou SQLite) das ações aguardando confirmação, chaveado pelo `DIALOG_ID` recebido em `data[PARAMS][DIALOG_ID]` no payload de `ONIMBOTMESSAGEADD` (o mesmo valor exigido por `imbot.message.add` para responder no chat certo — não um "chat_id" genérico), com expiração (10 minutos). Uma pendência expirada é tratada como inexistente na próxima mensagem.
 
 5. **`src/bot/reply.js`** — wrapper sobre `imbot.message.add` para responder no chat correto.
 
@@ -62,17 +63,18 @@ O Bot Server é um processo HTTP novo e independente do servidor MCP atual (que 
 ### Escrita (ex: "cria uma tarefa pro João revisar o contrato até sexta")
 
 1. Mesmo caminho até `agent-loop.js`.
-2. Claude identifica ação sensível (cria/edita/exclui dado), monta um resumo em linguagem natural da ação proposta e pergunta confirmação (ex: "sim/não"). O resumo e os parâmetros da ação são gravados em `pending-actions.js` (chat_id → ação serializada + expiração de 10 min).
+2. Claude identifica ação sensível (cria/edita/exclui dado), monta um resumo em linguagem natural da ação proposta e pergunta confirmação (ex: "sim/não"). O resumo e os parâmetros da ação são gravados em `pending-actions.js` (DIALOG_ID → ação serializada + expiração de 10 min).
 3. Resposta é enviada ao usuário; o bot aguarda a próxima mensagem daquele chat.
-4. Na próxima mensagem do mesmo chat: se existir pendência não expirada, o texto é interpretado primeiro como confirmação/ajuste/recusa.
-   - "sim" → executa via `Bitrix24Writer`, responde com o resultado (ex: link do registro criado), limpa a pendência, registra no log de auditoria, e passa a ação executada para avaliação de memória (passo seguinte).
+4. Na próxima mensagem do mesmo chat: se existir pendência não expirada, o texto é primeiro classificado pela Claude em uma de quatro categorias: confirmação, recusa, ajuste, ou **pedido novo não relacionado**. Critério de desempate entre "ajuste" e "pedido novo": se a mensagem se refere ao mesmo registro/entidade da ação pendente (ex: muda um campo dela, como prazo ou destinatário), é ajuste; se menciona uma entidade diferente ou uma intenção sem relação com a ação pendente (ex: pendência é criar tarefa e a mensagem pergunta sobre leads), é pedido novo.
+   - "sim"/confirmação → executa via `Bitrix24Writer`, responde com o resultado (ex: link do registro criado), limpa a pendência, registra no log de auditoria, e passa a ação executada para avaliação de memória (passo seguinte).
    - "não" ou pedido de ajuste → descarta ou reformula a proposta, sem tocar no Bitrix24.
+   - **Pedido novo não relacionado** (ex: pendência era "criar tarefa" e a mensagem seguinte pergunta algo sobre leads) → a pendência é cancelada, o bot avisa em uma linha ("cancelei a proposta anterior, já que você mudou de assunto") e o texto é processado como um pedido novo desde o passo 1.
    - Pendência expirada → a mensagem é tratada como um pedido novo.
 
 ### Memória de longo prazo
 
 - **Leitura:** no início de cada chamada a `agent-loop.js`, os fatos gravados para aquele usuário em `memory.js` são injetados no contexto antes da mensagem atual, evitando que o usuário precise repetir informações (departamento padrão de uma pessoa, prazos costumeiros, preferências de nomenclatura, etc.).
-- **Escrita:** depois que uma ação é confirmada e executada, ou quando o usuário corrige explicitamente algo que o assistente entendeu errado, `agent-loop.js` avalia se algo ali deve virar um fato durável e acrescenta a `memory.js` (sem duplicar o que já existe).
+- **Escrita:** ao final de **toda** interação (leitura ou escrita confirmada), ou quando o usuário corrige explicitamente algo que o assistente entendeu errado, `agent-loop.js` avalia se algo ali deve virar um fato durável (ex: um filtro repetido em consultas, um departamento padrão) e acrescenta a `memory.js` (sem duplicar o que já existe). Isso cobre tanto ações de escrita quanto preferências reveladas em consultas de leitura.
 - **Poda:** como o arquivo de memória cresce com o uso, há um limite de fatos por usuário; ao ultrapassar, os fatos mais antigos/menos usados são resumidos ou removidos, para não estourar o contexto de usuários muito ativos.
 - **Histórico curto vs. memória longa:** o histórico de conversa (~10 mensagens) é contexto imediato e expira; a memória de longo prazo persiste indefinidamente em disco, por usuário.
 
@@ -80,20 +82,30 @@ O Bot Server é um processo HTTP novo e independente do servidor MCP atual (que 
 
 Decisão do usuário: **todos os usuários do portal** podem conversar com o bot e disparar ações — não há lista branca. Como contrapartida, há proteções operacionais (ver seção seguinte), não restrições de acesso.
 
+### Risco aceito: escalonamento de privilégio
+
+O bot executa toda ação de escrita através do webhook único do `Bitrix24Writer`, que tem seu próprio escopo de permissões (definido pelos scopes habilitados no webhook), **não** as permissões individuais de cada usuário do Bitrix24. Isso significa que um usuário comum pode, através do bot, conseguir executar uma ação que não teria permissão de fazer logado normalmente na interface do Bitrix24 (ex: mover ou excluir um registro de outro departamento).
+
+Dado que a decisão foi liberar o bot para todos os usuários, este é um **risco aceito conscientemente**, mitigado por:
+- Confirmação obrigatória antes de qualquer escrita, incluindo exclusões — o resumo apresentado ao usuário antes do "sim" deixa explícito o impacto da ação, inclusive quando é irreversível (seção "Fluxo de dados").
+- Log de auditoria completo de toda ação executada (quem pediu, o quê, quando), permitindo reverter manualmente e identificar uso indevido depois do fato.
+
+Uma correção completa desse risco (verificar a permissão real do usuário antes de executar, por exemplo autenticando cada ação com o OAuth individual do usuário em vez do webhook compartilhado) é uma mudança de arquitetura maior, registrada em "Fora de escopo" para avaliação futura.
+
 ## Tratamento de erros e segurança
 
-- **Validação de evento:** todo POST em `/bitrix-events` precisa apresentar o `application_token` recebido no registro do bot; requisições sem token válido são descartadas com HTTP 403.
+- **Validação de evento:** todo POST em `/bitrix-events` precisa apresentar em `auth.application_token` o valor persistido em `bot-config.json` no momento do registro do bot; requisições sem correspondência exata são descartadas com HTTP 403.
 - **Falha ao chamar a API da Claude** (timeout, rate limit): o bot responde no chat informando que não conseguiu processar e sugere tentar novamente — nunca deixa a mensagem sem retorno.
 - **Falha na escrita ao Bitrix24:** o erro da API é traduzido em uma resposta legível no chat; a ação pendente correspondente é descartada (não fica "meio executada").
 - **Ambiguidade na interpretação:** se `agent-loop.js` não tiver informação suficiente para montar a ação com segurança, pergunta ao usuário em vez de adivinhar, antes de propor confirmação.
-- **Rate limit por usuário:** como não há whitelist, um limite simples (ex: 20 mensagens/minuto por usuário) evita loops acidentais ou abuso consumindo a cota da API da Claude. É proteção operacional, não controle de permissão.
+- **Rate limit em duas camadas:** um limite por usuário (ex: 20 mensagens/minuto) evita loops acidentais de uma única pessoa; um limite **global** agregado (ex: 200 mensagens/minuto somando todos os usuários) protege a cota da API da Claude e o rate limit da API REST do Bitrix24, que são recursos compartilhados — sem o limite global, muitos usuários abaixo do limite individual ainda poderiam somar tráfego suficiente para esgotar o backend. Ambos os contadores vivem em memória do processo Bot Server (janela de 1 minuto, sem necessidade de persistência); um restart do processo zera os contadores momentaneamente, o que é aceitável para este design porque a janela é curta e restarts não são o vetor de abuso que o limite pretende conter. Ao exceder qualquer um dos dois limites, o bot **sempre responde** (nunca descarta silenciosamente) com uma mensagem curta pedindo para aguardar alguns instantes — mantendo a garantia de que toda mensagem recebe algum retorno. É proteção operacional, não controle de permissão.
 - **Log de auditoria:** toda ação de escrita executada (quem pediu, o que foi feito, quando, resultado) é registrada em um log local, permitindo rastrear ações incorretas depois.
 
 ## Testes
 
 - **Unitários:** `agent-loop.js` (decisão leitura vs. escrita, montagem do resumo de confirmação, expiração de pendência) e `memory.js` (leitura, escrita, poda de fatos), usando mocks de `Bitrix24Reader`/`Writer` — sem bater no Bitrix24 real.
 - **Integração do endpoint:** simula um payload real de `ONIMBOTMESSAGEADD` contra `server.js`, cobrindo token válido e inválido.
-- **Fluxo de confirmação ponta a ponta:** duas mensagens seguidas do mesmo chat_id (pedido → "sim"), verificando que a ação só é executada na segunda mensagem, e que a pendência expira corretamente após o tempo configurado.
+- **Fluxo de confirmação ponta a ponta:** duas mensagens seguidas do mesmo DIALOG_ID (pedido → "sim"), verificando que a ação só é executada na segunda mensagem, e que a pendência expira corretamente após o tempo configurado; e um terceiro caso com um pedido novo não relacionado no lugar do "sim", verificando que a pendência anterior é cancelada.
 - **Manual, contra o portal real:** antes de liberar para todos os usuários, testar com um usuário de teste pedindo uma leitura, uma escrita com confirmação, e uma correção que deveria gerar memória — conferindo o log de auditoria.
 
 ## Fora de escopo (por ora)
@@ -102,3 +114,4 @@ Decisão do usuário: **todos os usuários do portal** podem conversar com o bot
 - Interface para o usuário visualizar/editar manualmente sua própria memória (ex: comando "esquece isso") — não foi pedido, pode ser considerado depois.
 - Memória compartilhada entre usuários (decisão: memória é sempre por usuário).
 - Lista branca de usuários autorizados (decisão: liberado para todos, com proteções operacionais em vez de controle de acesso).
+- Verificação de permissão individual por usuário antes de executar cada ação (ex: autenticar via OAuth do próprio usuário em vez do webhook compartilhado) — resolveria o risco de escalonamento de privilégio descrito em "Permissões", mas é uma mudança de arquitetura maior, fora do escopo desta primeira versão.
