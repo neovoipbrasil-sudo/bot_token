@@ -103,9 +103,13 @@ Uma correção completa desse risco (verificar a permissão real do usuário ant
 
 ## Testes
 
-- **Unitários:** `agent-loop.js` (decisão leitura vs. escrita, montagem do resumo de confirmação, expiração de pendência) e `memory.js` (leitura, escrita, poda de fatos), usando mocks de `Bitrix24Reader`/`Writer` — sem bater no Bitrix24 real.
+- **Unitários:** `agent-loop.js` (decisão leitura vs. escrita, montagem do resumo de confirmação, expiração de pendência, e a classificação em 4 categorias — confirmação/recusa/ajuste/pedido novo — incluindo o critério de desempate "mesma entidade vs. entidade diferente" da seção "Fluxo de dados") e `memory.js` (leitura, escrita, poda de fatos), usando mocks de `Bitrix24Reader`/`Writer` — sem bater no Bitrix24 real.
 - **Integração do endpoint:** simula um payload real de `ONIMBOTMESSAGEADD` contra `server.js`, cobrindo token válido e inválido.
-- **Fluxo de confirmação ponta a ponta:** duas mensagens seguidas do mesmo DIALOG_ID (pedido → "sim"), verificando que a ação só é executada na segunda mensagem, e que a pendência expira corretamente após o tempo configurado; e um terceiro caso com um pedido novo não relacionado no lugar do "sim", verificando que a pendência anterior é cancelada.
+- **Fluxo de confirmação ponta a ponta:** quatro casos com o mesmo DIALOG_ID, cada um partindo de um pedido de escrita pendente —
+  1. pedido → "sim": verifica que a ação só é executada na segunda mensagem, e que a pendência expira corretamente após o tempo configurado;
+  2. pedido → ajuste (ex: "muda pra segunda-feira"): verifica que a pendência existente é **atualizada** com o novo valor, não recriada do zero, e que uma nova confirmação é pedida antes de executar;
+  3. pedido → recusa ("não"): verifica que a proposta é descartada sem tocar no Bitrix24;
+  4. pedido → pedido novo não relacionado: verifica que a pendência anterior é cancelada e o novo texto é processado do zero.
 - **Manual, contra o portal real:** antes de liberar para todos os usuários, testar com um usuário de teste pedindo uma leitura, uma escrita com confirmação, e uma correção que deveria gerar memória — conferindo o log de auditoria.
 
 ## Fora de escopo (por ora)
