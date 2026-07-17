@@ -3,6 +3,9 @@ import path from 'path';
 
 export function createMemoryStore({ dataDir, maxFactsPerUser = 50 }) {
   function filePathFor(userId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(String(userId))) {
+      throw new Error(`Invalid userId: ${userId}`);
+    }
     return path.join(dataDir, 'memory', `${userId}.json`);
   }
 
