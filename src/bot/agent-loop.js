@@ -1,4 +1,4 @@
-import { getTool } from './tool-registry.js';
+import { toolsForClaude, getTool } from './tool-registry.js';
 
 const CLASSIFY_SYSTEM_PROMPT = `Você classifica a resposta de um usuário a uma proposta de ação pendente no Bitrix24.
 Responda APENAS com um JSON válido, sem texto ao redor, no formato:
@@ -72,8 +72,43 @@ export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, m
   }
 
   async function handleNewRequest({ userId, dialogId, text }) {
-    // Implemented in Task 10.
-    throw new Error('handleNewRequest not implemented yet');
+    const facts = memory.loadFacts(userId);
+    const factsBlock = facts.length
+      ? `Fatos conhecidos sobre este usuário (use para não pedir informação que ele já deu antes):\n${facts.map(f => `- ${f.fact} (${f.howToApply})`).join('\n')}`
+      : '';
+
+    const messages = [{ role: 'user', content: text }];
+
+    while (true) {
+      const response = await anthropic.messages.create({
+        model,
+        max_tokens: 1024,
+        system: `Você é o assistente do Bitrix24. Interprete o pedido do usuário e use as ferramentas disponíveis para executá-lo. ${factsBlock}`,
+        tools: toolsForClaude(),
+        messages,
+      });
+
+      if (response.stop_reason !== 'tool_use') {
+        const textBlock = response.content.find(b => b.type === 'text');
+        const replyText = textBlock ? textBlock.text : '(sem resposta)';
+        await evaluateMemory({ userId, interactionSummary: `Pedido do usuário: "${text}". Resposta do assistente: "${replyText}".` });
+        return { replies: [replyText] };
+      }
+
+      const toolUseBlock = response.content.find(b => b.type === 'tool_use');
+      const tool = getTool(toolUseBlock.name);
+
+      if (tool.sensitive) {
+        const introBlock = response.content.find(b => b.type === 'text');
+        const summary = introBlock ? introBlock.text : `Executar ${tool.name} com ${JSON.stringify(toolUseBlock.input)}`;
+        pendingActions.setPending(dialogId, { tool: tool.name, params: toolUseBlock.input, summary });
+        return { replies: [`${summary} Confirma? (sim/não)`] };
+      }
+
+      const result = await executeTool(tool.name, toolUseBlock.input);
+      messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: JSON.stringify(result) }] });
+    }
   }
 
   const loop = {

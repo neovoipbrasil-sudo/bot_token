@@ -100,3 +100,69 @@ describe('agent-loop — pending confirmation branch', () => {
     expect(replies[1]).toBe('Aqui está o que você pediu.');
   });
 });
+
+describe('agent-loop — new request branch', () => {
+  let stores;
+  beforeEach(() => { stores = fakeStores(); });
+
+  it('executes a read tool directly and replies with the result, no confirmation needed', async () => {
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create
+      .mockResolvedValueOnce({
+        stop_reason: 'tool_use',
+        content: [{ type: 'tool_use', id: 'call_1', name: 'crm_list', input: { entity: 'lead' } }],
+      })
+      .mockResolvedValueOnce({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'Entraram 5 leads essa semana.' }],
+      })
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+
+    const executedTool = vi.fn().mockResolvedValue({ count: 5, items: [] });
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    const { replies } = await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'quantos leads entraram essa semana?' });
+
+    expect(executedTool).toHaveBeenCalledWith('crm_list', { entity: 'lead' });
+    expect(stores.pendingActions.setPending).not.toHaveBeenCalled();
+    expect(replies).toEqual(['Entraram 5 leads essa semana.']);
+  });
+
+  it('does not execute a sensitive tool directly — sets a pending action and asks for confirmation', async () => {
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [
+        { type: 'text', text: 'Vou criar a tarefa "Revisar contrato" para o João, prazo sexta.' },
+        { type: 'tool_use', id: 'call_1', name: 'tasks_create', input: { fields: { TITLE: 'Revisar contrato', RESPONSIBLE_ID: 7, DEADLINE: '2026-07-17' } } },
+      ],
+    });
+
+    const executedTool = vi.fn();
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    const { replies } = await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'cria uma tarefa pro João revisar o contrato até sexta' });
+
+    expect(executedTool).not.toHaveBeenCalled();
+    expect(stores.pendingActions.setPending).toHaveBeenCalledWith('dialog-1', expect.objectContaining({
+      tool: 'tasks_create',
+      params: { fields: { TITLE: 'Revisar contrato', RESPONSIBLE_ID: 7, DEADLINE: '2026-07-17' } },
+    }));
+    expect(replies[0]).toMatch(/confirma|sim.*não/i);
+  });
+
+  it('injects the user long-term memory facts into the system prompt', async () => {
+    stores.memory.loadFacts = vi.fn(() => [{ fact: 'Tarefas do João vão para o departamento Comercial', reason: 'r', howToApply: 'h', addedAt: 'now' }]);
+
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] })
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: vi.fn() });
+
+    await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'oi' });
+
+    const firstCallArgs = anthropic.messages.create.mock.calls[0][0];
+    expect(firstCallArgs.system).toMatch(/Departamento Comercial|departamento Comercial/);
+  });
+});
