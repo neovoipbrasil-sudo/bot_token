@@ -19,9 +19,9 @@ Bots do Bitrix24 só recebem eventos de chats onde participam. O chat "notas par
 Usuário (chat 1:1 com o bot)
         │  mensagem de texto
         ▼
-Bitrix24 Portal  ──POST evento ONIMBOTMESSAGEADD──▶  Bot Server (novo processo Node.js)
+Bitrix24 Portal  ──POST evento ONIMBOTV2MESSAGEADD──▶  Bot Server (novo processo Node.js)
         ▲                                                   │
-        │  imbot.message.add (resposta/confirmação)         │
+        │  imbot.v2.Chat.Message.send (resposta/confirmação)│
         └───────────────────────────────────────────────────┘
                                                               │
                                                    Loop de tool-use (API da Claude)
@@ -37,16 +37,18 @@ O Bot Server é um processo HTTP novo e independente do servidor MCP atual (que 
 
 ## Componentes
 
-1. **`src/bot/register.js`** — script executado manualmente uma única vez (ou ao reconfigurar). **Premissa não validada, a confirmar como primeiro passo do plano de implementação:** que o `B24_DEFAULT_WEBHOOK` já usado pelo MCP (com o escopo `imbot` habilitado) é suficiente para chamar `imbot.register` e para obter o `application_token` via `app.info` — a API do Bitrix24 pode em vez disso exigir uma aplicação REST local instalada (`client_id`/`client_secret`). Enquanto essa premissa não é confirmada contra o portal real, o restante desta seção descreve o comportamento **assumindo que funciona por incoming webhook**; se não funcionar, `register.js` falha com mensagem clara e o design precisa ser revisto antes de prosseguir.
-   - Assumindo a premissa válida: `register.js` chama `imbot.register` com os campos obrigatórios (`CODE`, `TYPE=B`, `EVENT_HANDLER` apontando para a URL pública do Bot Server, `PROPERTIES[NAME]`), registra os eventos `ONIMBOTMESSAGEADD` e `ONIMBOTJOINCHAT`, e persiste `BOT_ID` + `application_token` (obtido via `app.info`) em `src/bot/bot-config.json`, lido por `server.js` e `reply.js`.
+1. **`src/bot/register.js`** — script executado manualmente uma única vez (ou ao reconfigurar). **Premissa validada empiricamente em 2026-07-17 contra o portal real:** o `B24_DEFAULT_WEBHOOK` já usado pelo MCP (com o escopo `imbot` habilitado) é suficiente — não é necessária nenhuma aplicação REST local (OAuth, `client_id`/`client_secret`). A API atual é `imbot.v2.*` (a antiga `imbot.register`, testada primeiro, de fato falha via webhook com `ACCESS_DENIED`, mas é deprecated e não é o caminho correto).
+   - `register.js` escolhe um `botToken` (string arbitrária, até 40 caracteres — funciona como segredo do bot, não é gerado pelo Bitrix24) e chama `imbot.v2.Bot.register` com `fields.botToken`, `fields.code`, `fields.properties.name`, `fields.type = 'bot'` e `fields.eventMode = 'fetch'` inicialmente, obtendo `botId`.
+   - Em seguida chama `imbot.v2.Bot.update` com `botId` + `botToken` + `fields.eventMode = 'webhook'` + `fields.webhookUrl` apontando para a URL pública do Bot Server — isso ativa a entrega dos eventos `ONIMBOTV2*` automaticamente (não é preciso `event.bind` manual).
+   - `register.js` persiste `botId` + `botToken` + `webhookUrl` em `src/bot/bot-config.json`, lido por `server.js` e `reply.js`.
 
-2. **`src/bot/server.js`** — servidor HTTP com endpoint `POST /bitrix-events`. Todo evento do Bitrix24 traz um campo `auth.application_token` no payload; `server.js` compara esse valor com o persistido em `bot-config.json` (obtido no registro) e descarta com HTTP 403 qualquer requisição sem correspondência exata.
+2. **`src/bot/server.js`** — servidor HTTP com endpoint `POST /bitrix-events`. Todo evento do Bitrix24 traz, no **nível raiz** do payload, um campo `auth.application_token` (não confundir com `data.bot.auth.application_token`, que é um token OAuth interno do bot e a documentação alerta explicitamente contra usá-lo para validação). `server.js` calcula o valor esperado como `'custom' + botConfig.botToken` (confirmado empiricamente: com `botToken = 'spike_token_12345'`, o valor recebido foi `customspike_token_12345`) e descarta com HTTP 403 qualquer requisição sem correspondência exata.
 
 3. **`src/bot/agent-loop.js`** — núcleo de interpretação. Recebe o texto da mensagem, o histórico curto do chat e a memória de longo prazo do usuário; chama a API da Claude com as ferramentas adaptadas dos schemas `zod` já definidos em `src/tools/*.js`. Decide se a ação é leitura (executa direto) ou escrita (monta resumo e aciona confirmação). Se faltar informação para montar a ação com segurança, pergunta ao usuário em vez de adivinhar.
 
-4. **`src/bot/pending-actions.js`** — armazenamento local (arquivo JSON ou SQLite) das ações aguardando confirmação, chaveado pelo `DIALOG_ID` recebido em `data[PARAMS][DIALOG_ID]` no payload de `ONIMBOTMESSAGEADD` (o mesmo valor exigido por `imbot.message.add` para responder no chat certo — não um "chat_id" genérico), com expiração (10 minutos). Uma pendência expirada é tratada como inexistente na próxima mensagem.
+4. **`src/bot/pending-actions.js`** — armazenamento local (arquivo JSON ou SQLite) das ações aguardando confirmação, chaveado pelo `dialogId` recebido em `data.chat.dialogId` no payload de `ONIMBOTV2MESSAGEADD` (o mesmo valor exigido por `imbot.v2.Chat.Message.send` para responder no chat certo — para chats 1:1 é o ID do usuário, para grupos é `chat{chatId}`), com expiração (10 minutos). Uma pendência expirada é tratada como inexistente na próxima mensagem.
 
-5. **`src/bot/reply.js`** — wrapper sobre `imbot.message.add` para responder no chat correto.
+5. **`src/bot/reply.js`** — wrapper sobre `imbot.v2.Chat.Message.send` (parâmetros: `botId`, `botToken`, `dialogId`, `fields.message`) para responder no chat correto.
 
 6. **Ferramentas reaproveitadas** — nenhuma duplicação de lógica: `agent-loop.js` importa e chama diretamente as mesmas funções já usadas pelo servidor MCP (`src/tools/crm.js`, `tasks.js`, `calendar.js`, etc.), só que como chamadas de função diretas em vez de via protocolo MCP.
 
@@ -56,7 +58,7 @@ O Bot Server é um processo HTTP novo e independente do servidor MCP atual (que 
 
 ### Leitura (ex: "quantos leads entraram essa semana")
 
-1. Bitrix24 envia `ONIMBOTMESSAGEADD` → `server.js` valida o token e repassa o texto para `agent-loop.js`.
+1. Bitrix24 envia `ONIMBOTV2MESSAGEADD` → `server.js` valida o token e repassa o texto para `agent-loop.js`.
 2. `agent-loop.js` carrega a memória de longo prazo do usuário e o histórico curto do chat, chama a API da Claude, que decide que é uma consulta e chama a função de leitura correspondente diretamente (ex: `crm.js`, filtro de data).
 3. Resultado formatado é enviado de volta via `reply.js`. Fim — sem confirmação.
 
@@ -94,7 +96,7 @@ Uma correção completa desse risco (verificar a permissão real do usuário ant
 
 ## Tratamento de erros e segurança
 
-- **Validação de evento:** todo POST em `/bitrix-events` precisa apresentar em `auth.application_token` o valor persistido em `bot-config.json` no momento do registro do bot; requisições sem correspondência exata são descartadas com HTTP 403.
+- **Validação de evento:** todo POST em `/bitrix-events` precisa apresentar em `auth.application_token` (nível raiz do payload) o valor `'custom' + botToken`, calculado a partir do `botToken` persistido em `bot-config.json` no momento do registro do bot; requisições sem correspondência exata são descartadas com HTTP 403.
 - **Falha ao chamar a API da Claude** (timeout, rate limit): o bot responde no chat informando que não conseguiu processar e sugere tentar novamente — nunca deixa a mensagem sem retorno.
 - **Falha na escrita ao Bitrix24:** o erro da API é traduzido em uma resposta legível no chat; a ação pendente correspondente é descartada (não fica "meio executada").
 - **Ambiguidade na interpretação:** se `agent-loop.js` não tiver informação suficiente para montar a ação com segurança, pergunta ao usuário em vez de adivinhar, antes de propor confirmação.
@@ -104,7 +106,7 @@ Uma correção completa desse risco (verificar a permissão real do usuário ant
 ## Testes
 
 - **Unitários:** `agent-loop.js` (decisão leitura vs. escrita, montagem do resumo de confirmação, expiração de pendência, e a classificação em 4 categorias — confirmação/recusa/ajuste/pedido novo — incluindo o critério de desempate "mesma entidade vs. entidade diferente" da seção "Fluxo de dados") e `memory.js` (leitura, escrita, poda de fatos), usando mocks de `Bitrix24Reader`/`Writer` — sem bater no Bitrix24 real.
-- **Integração do endpoint:** simula um payload real de `ONIMBOTMESSAGEADD` contra `server.js`, cobrindo token válido e inválido.
+- **Integração do endpoint:** simula um payload real de `ONIMBOTV2MESSAGEADD` contra `server.js`, cobrindo token válido e inválido.
 - **Fluxo de confirmação ponta a ponta:** quatro casos com o mesmo DIALOG_ID, cada um partindo de um pedido de escrita pendente —
   1. pedido → "sim": verifica que a ação só é executada na segunda mensagem, e que a pendência expira corretamente após o tempo configurado;
   2. pedido → ajuste (ex: "muda pra segunda-feira"): verifica que a pendência existente é **atualizada** com o novo valor, não recriada do zero, e que uma nova confirmação é pedida antes de executar;
