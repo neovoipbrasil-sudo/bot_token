@@ -23,7 +23,7 @@ const registerResult = await client.call('imbot.v2.Bot.register', {
     eventMode: 'fetch',
   },
 });
-const botId = registerResult.result;
+const botId = registerResult.result.bot.id;
 
 await client.call('imbot.v2.Bot.update', {
   botId,
@@ -37,6 +37,6 @@ const config = {
   webhookUrl: EVENT_HANDLER_URL,
 };
 
-writeFileSync(new URL('./bot-config.json', import.meta.url), JSON.stringify(config, null, 2));
+writeFileSync(new URL('./bot-config.json', import.meta.url), JSON.stringify(config, null, 2), { mode: 0o600 });
 console.log('Bot registrado com sucesso. Config salva em src/bot/bot-config.json:');
 console.log(config);
