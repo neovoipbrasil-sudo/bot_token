@@ -1,4 +1,3 @@
-import { readFileSync } from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { Bitrix24Client } from '../bitrix24/client.js';
 import { resolveWebhook } from '../utils/resolve-webhook.js';
@@ -9,10 +8,11 @@ import { createRateLimiter } from './message-rate-limiter.js';
 import { createPendingActionsStore } from './pending-actions.js';
 import { createMemoryStore } from './memory.js';
 import { createAuditLog } from './audit-log.js';
+import { loadBotConfig } from './bot-config.js';
 
 const PORT = process.env.BOT_PORT || 3300;
 
-const botConfig = JSON.parse(readFileSync(new URL('./bot-config.json', import.meta.url), 'utf-8'));
+const botConfig = loadBotConfig({ filePath: new URL('./bot-config.json', import.meta.url) });
 
 const bitrixClient = new Bitrix24Client(resolveWebhook());
 const anthropic = new Anthropic();
