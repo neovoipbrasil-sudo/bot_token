@@ -1,6 +1,17 @@
 import express from 'express';
+import { parseMsnTalkEvent } from '../msntalk/webhook-handler.js';
+import { syncTimeline } from '../msntalk/sync-timeline.js';
 
-export function createApp({ botConfig, agentLoop, reply, rateLimiter }) {
+export function createApp({
+  botConfig,
+  agentLoop,
+  reply,
+  rateLimiter,
+  bitrixClient,
+  auditLog,
+  msntalkWebhookSecret,
+  msntalkTicketUrlTemplate,
+}) {
   const app = express();
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
@@ -42,6 +53,28 @@ export function createApp({ botConfig, agentLoop, reply, rateLimiter }) {
         await reply(dialogId, 'Não consegui processar sua mensagem agora, tenta de novo em instantes.');
       }
     }
+  });
+
+  app.post('/msntalk-events/:secret', (req, res) => {
+    if (req.params.secret !== msntalkWebhookSecret) {
+      return res.status(404).send('not found');
+    }
+
+    // Ack immediately — same "fast ack, process after" pattern as /bitrix-events.
+    res.status(200).send('ok');
+
+    const event = parseMsnTalkEvent(req.body);
+    if (!event) return;
+
+    syncTimeline({
+      event,
+      client: bitrixClient,
+      auditLog,
+      ticketUrlTemplate: msntalkTicketUrlTemplate,
+    }).catch(() => {
+      // MSN Talk has no retry mechanism we can hook into — failures stay
+      // visible via the audit log entry (or its absence) and Bitrix24 errors.
+    });
   });
 
   return app;

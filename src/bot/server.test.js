@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from './server.js';
+import { parseMsnTalkEvent } from '../msntalk/webhook-handler.js';
 
 function setup({ handleMessageImpl, allowed = true } = {}) {
   const agentLoop = { handleMessage: vi.fn(handleMessageImpl ?? (async () => ({ replies: ['ok'] }))) };
@@ -62,5 +63,65 @@ describe('POST /bitrix-events', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(reply).toHaveBeenCalledWith('dialog-1', expect.stringMatching(/não consegui|tenta de novo/i)));
+  });
+});
+
+async function setupMsnTalk({ syncTimelineImpl, ...overrides } = {}) {
+  const syncTimeline = vi.fn(syncTimelineImpl ?? (async () => ({ matched: true })));
+  vi.doMock('../msntalk/sync-timeline.js', () => ({ syncTimeline }));
+  vi.resetModules();
+  const { createApp: createAppFresh } = await import('./server.js');
+
+  const app = createAppFresh({
+    botConfig: { botId: 456, botToken: 'secret-token' },
+    agentLoop: { handleMessage: vi.fn() },
+    reply: vi.fn(),
+    rateLimiter: { checkAndConsume: vi.fn() },
+    bitrixClient: { call: vi.fn() },
+    auditLog: { logAction: vi.fn() },
+    msntalkWebhookSecret: 'right-secret',
+    msntalkTicketUrlTemplate: undefined,
+    ...overrides,
+  });
+
+  return { app, syncTimeline };
+}
+
+describe('POST /msntalk-events/:secret', () => {
+  it('responds 404 for a wrong secret and does not process the event', async () => {
+    const { app, syncTimeline } = await setupMsnTalk();
+
+    const res = await request(app).post('/msntalk-events/wrong-secret').send({ method: 'message' });
+
+    expect(res.status).toBe(404);
+    expect(syncTimeline).not.toHaveBeenCalled();
+  });
+
+  it('responds 200 and calls syncTimeline for a valid event with the right secret', async () => {
+    const { app, syncTimeline } = await setupMsnTalk();
+
+    const body = {
+      method: 'message',
+      msg: { fromMe: false, text: 'oi' },
+      ticket: { id: 1, protocol: 'p1', contact: { number: '5511999999999' } },
+    };
+    const res = await request(app).post('/msntalk-events/right-secret').send(body);
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(syncTimeline).toHaveBeenCalledWith({
+      event: parseMsnTalkEvent(body),
+      client: expect.anything(),
+      auditLog: expect.anything(),
+      ticketUrlTemplate: undefined,
+    }));
+  });
+
+  it('responds 200 without calling syncTimeline when the event is unrecognized', async () => {
+    const { app, syncTimeline } = await setupMsnTalk();
+
+    const res = await request(app).post('/msntalk-events/right-secret').send({ method: 'ticket_closed' });
+
+    expect(res.status).toBe(200);
+    expect(syncTimeline).not.toHaveBeenCalled();
   });
 });
