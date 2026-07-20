@@ -24,7 +24,25 @@ const memory = createMemoryStore({ dataDir: new URL('./data', import.meta.url).p
 const auditLog = createAuditLog(new URL('./data/audit.jsonl', import.meta.url).pathname);
 const agentLoop = createAgentLoop({ anthropic, pendingActions, memory, auditLog });
 
-const app = createApp({ botConfig, agentLoop, reply, rateLimiter });
+const msntalkWebhookSecret = process.env.MSNTALK_WEBHOOK_SECRET;
+if (!msntalkWebhookSecret) {
+  throw new Error(
+    'Defina MSNTALK_WEBHOOK_SECRET (segredo usado no path do webhook do MSN Talk, ' +
+    'ex.: https://<host>/msntalk-events/<MSNTALK_WEBHOOK_SECRET>) antes de subir o bot.'
+  );
+}
+const msntalkTicketUrlTemplate = process.env.MSNTALK_TICKET_URL_TEMPLATE;
+
+const app = createApp({
+  botConfig,
+  agentLoop,
+  reply,
+  rateLimiter,
+  bitrixClient,
+  auditLog,
+  msntalkWebhookSecret,
+  msntalkTicketUrlTemplate,
+});
 
 app.listen(PORT, () => {
   console.log(`Bot Server escutando na porta ${PORT}`);
