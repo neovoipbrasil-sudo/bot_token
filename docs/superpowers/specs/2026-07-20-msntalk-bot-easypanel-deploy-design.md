@@ -143,8 +143,11 @@ preservado, sem necessidade de validação extra.
 4. Rodar `node src/bot/register.js` **uma vez** — não precisa ser dentro do
    container do EasyPanel, pode ser localmente neste checkout
    (`/root/bitrix24-mcp`), já que o script só fala com a API REST do
-   Bitrix24 via `B24_DEFAULT_WEBHOOK` (já configurado no `.env` local). Rodar
-   com `BOT_EVENT_HANDLER_URL` apontando para a URL pública que o EasyPanel
+   Bitrix24. **Atenção:** o `.env` local hoje só tem `ANTHROPIC_API_KEY` —
+   `B24_DEFAULT_WEBHOOK` ainda não está configurado aí, então precisa ser
+   adicionado ao `.env` local (ou passado inline na chamada) antes de rodar o
+   script, senão `resolveWebhook()` lança erro. Rodar com
+   `BOT_EVENT_HANDLER_URL` apontando para a URL pública que o EasyPanel
    gerou (`https://<subdominio>.easypanel.host/bitrix-events`) e `BOT_TOKEN`
    igual ao que foi colocado na env var do app — isso registra o bot no
    Bitrix24 e imprime o `BOT_ID` no console (o `bot-config.json` que o script
