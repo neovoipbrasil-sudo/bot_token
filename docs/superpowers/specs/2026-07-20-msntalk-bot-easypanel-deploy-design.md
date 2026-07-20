@@ -50,6 +50,22 @@ histórico.
 
 ## Componentes
 
+### `.dockerignore` (novo, raiz do repo)
+
+Sem isso, `COPY . .` no Dockerfile copiaria `.git/` (histórico completo do
+repositório) e arquivos irrelevantes para dentro da imagem de produção — o
+EasyPanel builda clonando o repositório do GitHub, então o contexto de build
+inclui o clone inteiro, `.git/` incluso.
+
+```
+.git
+node_modules
+docs
+README.md
+*.test.js
+vitest.config.js
+```
+
 ### `Dockerfile` (novo, raiz do repo)
 
 Imagem Node simples: instala dependências de produção, copia o código, expõe
