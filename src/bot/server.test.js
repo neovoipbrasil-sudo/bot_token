@@ -124,4 +124,26 @@ describe('POST /msntalk-events/:secret', () => {
     expect(res.status).toBe(200);
     expect(syncTimeline).not.toHaveBeenCalled();
   });
+
+  it('responds 200 and logs an error audit-log entry when syncTimeline rejects', async () => {
+    const auditLog = { logAction: vi.fn() };
+    const { app } = await setupMsnTalk({
+      syncTimelineImpl: async () => { throw new Error('crm.deal.list failed'); },
+      auditLog,
+    });
+
+    const body = {
+      method: 'message',
+      msg: { fromMe: false, text: 'oi' },
+      ticket: { id: 42, protocol: 'p1', contact: { number: '5511999999999' } },
+    };
+    const res = await request(app).post('/msntalk-events/right-secret').send(body);
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(auditLog.logAction).toHaveBeenCalledWith({
+      tool: 'msntalk-sync',
+      params: { phone: '5511999999999', ticketId: 42 },
+      result: 'error',
+    }));
+  });
 });

@@ -71,9 +71,17 @@ export function createApp({
       client: bitrixClient,
       auditLog,
       ticketUrlTemplate: msntalkTicketUrlTemplate,
-    }).catch(() => {
-      // MSN Talk has no retry mechanism we can hook into — failures stay
-      // visible via the audit log entry (or its absence) and Bitrix24 errors.
+    }).catch((err) => {
+      // MSN Talk has no retry mechanism we can hook into, so we can't propagate
+      // this error back to the sender — we can only make it observable on our
+      // side: log it and record an audit-log entry (syncTimeline's own
+      // no-match audit entry is written on its clean success path, never here).
+      console.error('msntalk-events: syncTimeline failed', err);
+      auditLog.logAction({
+        tool: 'msntalk-sync',
+        params: { phone: event.phone, ticketId: event.ticketId },
+        result: 'error',
+      });
     });
   });
 
