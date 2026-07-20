@@ -171,16 +171,19 @@ passada para `agentLoop`), `createApp` precisa passar a aceitar também
 `{ auditLog, bitrixClient, msntalkWebhookSecret }`, e `bootstrap.js` precisa
 repassá-los na chamada de `createApp(...)`.
 
-- Compara `:secret` com `process.env.MSNTALK_WEBHOOK_SECRET` (obrigatória — o
-  bootstrap falha ao subir se não estiver definida, mesmo padrão de outras envs
-  críticas do bot).
+- Compara `:secret` com o parâmetro `msntalkWebhookSecret` recebido por
+  `createApp` — mesmo padrão já usado pela rota `/bitrix-events`, que compara
+  contra `botConfig.botToken` injetado, e não lê `process.env` diretamente
+  dentro de `server.js`. `bootstrap.js` é quem lê
+  `process.env.MSNTALK_WEBHOOK_SECRET` e falha ao subir se a env não estiver
+  definida (mesmo padrão de outras envs críticas do bot).
 - Se não bater, responde `404` genérico (não `403`, para não confirmar a
   existência da rota a quem estiver tentando adivinhar o path).
 - Se bater, responde `200` imediatamente e processa o evento de forma assíncrona
   (mesmo padrão de "ack rápido, processa depois" já usado em `/bitrix-events`).
-- Erros durante o processamento (ex.: chamada Bitrix24 falhou) são only logados —
-  nunca derrubam o processo nem retornam erro pro MSN Talk (que não temos como
-  tratar retry de qualquer forma).
+- Erros durante o processamento (ex.: chamada Bitrix24 falhou) são apenas
+  logados — nunca derrubam o processo nem retornam erro pro MSN Talk (que não
+  temos como tratar retry de qualquer forma).
 
 ## Configuração
 
