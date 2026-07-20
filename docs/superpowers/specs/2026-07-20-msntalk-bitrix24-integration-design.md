@@ -67,9 +67,8 @@ Achados importantes:
   incoming webhook. Portanto o segredo tem que estar embutido no path da nossa rota.
 - Outros valores de `method` podem existir e não foram observados; o parser deve
   ignorá-los (no-op) em vez de falhar.
-- Não existe (ou não foi confirmado) deep link do painel MSN Talk para abrir um
-  ticket específico por URL. O link no comentário do Bitrix fica atrás de uma env
-  var opcional, configurável depois que isso for confirmado.
+- O painel MSN Talk tem deep link confirmado para abrir um ticket específico:
+  `https://app.msntalk.neovoip.com.br/atendimento?ticketId={ticketId}`.
 
 ## Arquitetura
 
@@ -149,11 +148,11 @@ ou
 [MSN Talk] SDR: Queria confirmar...
 ```
 
-Se `MSNTALK_TICKET_URL_TEMPLATE` estiver definida (ex.:
-`https://painel.msntalk.../tickets/{ticketId}`), acrescenta uma linha com o link
-resolvido. Se não achou entidade correspondente, grava uma linha no audit log
-(`src/bot/audit-log.js`, reaproveitado) com telefone e ticketId, e encerra sem
-erro.
+Se `MSNTALK_TICKET_URL_TEMPLATE` estiver definida (default sugerido:
+`https://app.msntalk.neovoip.com.br/atendimento?ticketId={ticketId}`), acrescenta
+uma linha com o link resolvido. Se não achou entidade correspondente, grava uma
+linha no audit log (`src/bot/audit-log.js`, reaproveitado) com telefone e
+ticketId, e encerra sem erro.
 
 ### Rota `POST /msntalk-events/:secret` em `src/bot/server.js`
 
@@ -176,7 +175,8 @@ Novas variáveis de ambiente (documentar no `.env.example`):
   configurado como URL de webhook no painel do MSN Talk:
   `https://<host>/msntalk-events/<MSNTALK_WEBHOOK_SECRET>`.
 - `MSNTALK_TICKET_URL_TEMPLATE` (opcional) — template de deep link para o ticket,
-  com placeholder `{ticketId}`. Se ausente, o comentário não inclui link.
+  com placeholder `{ticketId}`. Se ausente, o comentário não inclui link. Valor
+  confirmado: `https://app.msntalk.neovoip.com.br/atendimento?ticketId={ticketId}`.
 
 ## Testes
 
@@ -197,8 +197,6 @@ Novas variáveis de ambiente (documentar no `.env.example`):
 - Sem assinatura no webhook do MSN Talk, a segurança depende inteiramente do
   segredo na URL não vazar (não deve aparecer em logs de acesso com o path
   completo em nível `info`, por exemplo).
-- Se o deep link do MSN Talk por ticket não existir de fato, o comentário fica
-  sem link clicável até isso ser resolvido — não bloqueia o restante da feature.
 - Contatos com telefone divergente do cadastrado no Bitrix24 (ex.: número pessoal
   vs. corporativo) não terão match e caem silenciosamente no audit log; não há,
   nesta primeira versão, alerta ativo para esses casos.
