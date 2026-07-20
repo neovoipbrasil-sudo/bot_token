@@ -118,14 +118,20 @@ Regras:
 ### `src/msntalk/find-crm-entity.js`
 
 ```js
-async function findCrmEntity(client, phone) → { entityTypeId, entityId } | null
+async function findCrmEntity(client, phone) → { entity: 'deal' | 'lead', entity_id } | null
 ```
 
-1. `crm.duplicate.findbycomm` (tipo `PHONE`, valor `phone`) → IDs de Contact e Lead
-   que batem com o telefone.
-2. Se houver Contact: `crm.deal.list` filtrando `CONTACT_ID` nesses IDs e
-   `CLOSED = N`, ordenado por `DATE_CREATE` desc — pega o primeiro (Deal aberto
-   mais recente).
+Retorna diretamente no formato que `timelineAdd` (`src/tools/crm.js:145-159`)
+espera — `entity` como string (`'deal'` ou `'lead'`) e `entity_id` — para
+`sync-timeline.js` poder chamar `timelineAdd` sem nenhuma camada de conversão.
+
+1. `crm.duplicate.findbycomm` (tipo `PHONE`, valor `phone`) → IDs de Contact,
+   Company e Lead que batem com o telefone (o Bitrix24 retorna os três tipos por
+   padrão quando `entity_type` não é informado).
+2. Se houver Contact e/ou Company: `crm.deal.list` filtrando
+   `(CONTACT_ID nesses IDs) OR (COMPANY_ID nesses IDs)` e `CLOSED = N`, ordenado
+   por `DATE_CREATE` desc — pega o primeiro (Deal aberto mais recente). Cobre o
+   caso de telefone cadastrado só na Empresa, sem Contato associado ao Deal.
 3. Se não achou Deal: entre os Leads retornados por `findbycomm`, filtra os que
    têm `STATUS_SEMANTIC_ID = P` (em aberto) e pega o mais recente.
 4. Se nada encontrado, retorna `null`.
@@ -136,8 +142,9 @@ formatação no lado do Bitrix24, então o número é passado como veio do MSN T
 
 ### `src/msntalk/sync-timeline.js`
 
-Orquestra os dois módulos acima e chama `timelineAdd` (já existe em
-`src/tools/crm.js`) no `{ entityTypeId, entityId }` encontrado. Texto do
+Orquestra os dois módulos acima e chama `timelineAdd({ entity, entity_id, comment })`
+(já existe em `src/tools/crm.js`, cria seu próprio `Bitrix24Client` internamente)
+com o resultado de `find-crm-entity.js`, repassado sem conversão. Texto do
 comentário:
 
 ```
@@ -150,9 +157,10 @@ ou
 
 Se `MSNTALK_TICKET_URL_TEMPLATE` estiver definida (default sugerido:
 `https://app.msntalk.neovoip.com.br/atendimento?ticketId={ticketId}`), acrescenta
-uma linha com o link resolvido. Se não achou entidade correspondente, grava uma
-linha no audit log (`src/bot/audit-log.js`, reaproveitado) com telefone e
-ticketId, e encerra sem erro.
+uma linha com o link resolvido. Se não achou entidade correspondente, chama
+`auditLog.logAction({ tool: 'msntalk-sync', params: { phone, ticketId }, result: 'no-match' })`
+usando a instância de `createAuditLog` já existente em `src/bot/audit-log.js`, e
+encerra sem erro.
 
 ### Rota `POST /msntalk-events/:secret` em `src/bot/server.js`
 
@@ -183,8 +191,9 @@ Novas variáveis de ambiente (documentar no `.env.example`):
 - `webhook-handler.test.js` — cobre os dois formatos de evento reais capturados
   (fixtures baseados nos payloads coletados), mais um `method` desconhecido
   (deve retornar `null`) e payload sem `contact.number` (deve retornar `null`).
-- `find-crm-entity.test.js` — mocka `Bitrix24Client.call` para os três cenários:
-  Deal aberto encontrado, só Lead aberto encontrado, nenhum encontrado.
+- `find-crm-entity.test.js` — mocka `Bitrix24Client.call` para os cenários: Deal
+  aberto encontrado via Contact, Deal aberto encontrado só via Company (sem
+  Contact), só Lead aberto encontrado, nenhum encontrado.
 - `sync-timeline.test.js` — mocka os dois módulos acima e `timelineAdd`, cobre
   caminho feliz (inbound e outbound) e caminho "sem match" (grava no audit log,
   não chama `timelineAdd`).
