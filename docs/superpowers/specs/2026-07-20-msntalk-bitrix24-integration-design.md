@@ -164,6 +164,13 @@ encerra sem erro.
 
 ### Rota `POST /msntalk-events/:secret` em `src/bot/server.js`
 
+`createApp` (`src/bot/server.js:3`) hoje recebe só `{ botConfig, agentLoop, reply,
+rateLimiter }` — não tem `auditLog` nem um `Bitrix24Client`. Para a nova rota
+reutilizar a instância de `auditLog` já criada em `bootstrap.js:24` (hoje só
+passada para `agentLoop`), `createApp` precisa passar a aceitar também
+`{ auditLog, bitrixClient, msntalkWebhookSecret }`, e `bootstrap.js` precisa
+repassá-los na chamada de `createApp(...)`.
+
 - Compara `:secret` com `process.env.MSNTALK_WEBHOOK_SECRET` (obrigatória — o
   bootstrap falha ao subir se não estiver definida, mesmo padrão de outras envs
   críticas do bot).
