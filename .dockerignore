@@ -1,0 +1,6 @@
+.git
+node_modules
+docs
+README.md
+*.test.js
+vitest.config.js
