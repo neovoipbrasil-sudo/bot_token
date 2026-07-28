@@ -151,10 +151,10 @@ export const timelineAddSchema = z.object({
 
 export async function timelineAdd({ entity, entity_id, comment, webhook_url }) {
   const client = new Bitrix24Client(resolveWebhook(webhook_url));
-  const entityMap = { deal: 'CRM_DEAL', contact: 'CRM_CONTACT', company: 'CRM_COMPANY', lead: 'CRM_LEAD' };
-  const entityCode = entityMap[entity?.toLowerCase()] ?? entity.toUpperCase();
+  // crm.timeline.comment.add quer o código de entidade minúsculo (lead, deal,
+  // contact, company) — o prefixo CRM_ usado noutros métodos causa OWNER_NOT_FOUND aquí.
   const res = await client.call('crm.timeline.comment.add', {
-    fields: { ENTITY_ID: entity_id, ENTITY_TYPE: entityCode, COMMENT: comment },
+    fields: { ENTITY_ID: entity_id, ENTITY_TYPE: entity.toLowerCase(), COMMENT: comment },
   });
   return { portal: client.portal, entity, entity_id, comment_id: res.result, success: true };
 }
