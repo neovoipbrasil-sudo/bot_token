@@ -33,6 +33,7 @@ import {
 } from '../tools/catalog-products.js';
 import { readPipelinesSchema, readPipelines } from '../tools/read-pipelines.js';
 import { readCustomFieldsSchema, readCustomFields } from '../tools/read-custom-fields.js';
+import { generateDocumentSchema, generateDocument } from './generate-document.js';
 
 export const TOOLS = [
   { name: 'crm_list', description: 'Lista registros de CRM (leads, deals, contacts, companies) com filtros opcionais. Ação de leitura, não exige confirmação.', schema: crmListSchema, handler: crmList, sensitive: false },
@@ -69,6 +70,8 @@ export const TOOLS = [
 
   { name: 'read_pipelines', description: 'Lista os funis (pipelines) e estágios configurados para um tipo de entidade de CRM. Ação de leitura, não exige confirmação.', schema: readPipelinesSchema, handler: readPipelines, sensitive: false },
   { name: 'read_custom_fields', description: 'Lista os campos personalizados configurados para um tipo de entidade de CRM. Ação de leitura, não exige confirmação.', schema: readCustomFieldsSchema, handler: readCustomFields, sensitive: false },
+
+  { name: 'generate_document', description: 'Gera um documento (txt, md, html, csv, pdf ou xlsx) a partir de conteúdo de texto ou de linhas de tabela, e o envia para o Disco do Bitrix24. O arquivo gerado é anexado automaticamente na resposta do chat. Ação de escrita, exige confirmação do usuário antes de executar.', schema: generateDocumentSchema, handler: generateDocument, sensitive: true },
 ];
 
 export function toolsForClaude() {

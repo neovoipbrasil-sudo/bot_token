@@ -49,6 +49,23 @@ describe('agent-loop — pending confirmation branch', () => {
     expect(replies.join(' ')).toMatch(/99/);
   });
 
+  it('returns a file-attachment reply instead of a plain JSON dump when generate_document is confirmed', async () => {
+    stores._pendingData.set('dialog-1', { tool: 'generate_document', params: { format: 'pdf', filename: 'relatorio', content: 'x' }, summary: 'Gerar relatório em PDF' });
+
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create
+      .mockResolvedValueOnce(claudeJsonResponse({ category: 'confirm', updatedParams: null }))
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+
+    const file = { id: 1, name: 'relatorio.pdf', size: 2048, downloadUrl: 'https://x/download' };
+    const executedTool = vi.fn().mockResolvedValue({ file });
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    const { replies } = await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'sim' });
+
+    expect(replies).toEqual([{ message: expect.stringContaining('relatorio.pdf'), file }]);
+  });
+
   it('clears the pending action and surfaces the real error when the tool execution fails', async () => {
     stores._pendingData.set('dialog-1', { tool: 'tasks_create', params: { fields: { TITLE: 'Teste' } }, summary: 'Criar tarefa "Teste"' });
 

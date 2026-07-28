@@ -23,7 +23,7 @@ const anthropic = process.env.BOT_MODEL_BACKEND === 'claude-code'
   : new Anthropic();
 
 const replyer = createReplyer({ client: bitrixClient, botId: botConfig.botId, botToken: botConfig.botToken });
-const { reply, notifyAction } = replyer;
+const { reply, notifyAction, replyWithFile } = replyer;
 const rateLimiter = createRateLimiter();
 const pendingActions = createPendingActionsStore({ filePath: new URL('./data/pending-actions.json', import.meta.url).pathname });
 const memory = createMemoryStore({ dataDir: new URL('./data', import.meta.url).pathname });
@@ -46,6 +46,7 @@ const app = createApp({
   agentLoop,
   reply,
   notifyAction,
+  replyWithFile,
   rateLimiter,
   bitrixClient,
   auditLog,

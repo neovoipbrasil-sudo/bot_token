@@ -59,6 +59,10 @@ export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, c
       }
       auditLog.logAction({ userId, dialogId, tool: pending.tool, params: pending.params, result });
       await evaluateMemory({ userId, interactionSummary: `Usuário confirmou e o assistente executou: ${pending.summary}. Resultado: ${JSON.stringify(result)}.` });
+
+      if (pending.tool === 'generate_document' && result.file) {
+        return { replies: [{ message: `Pronto, gerei o documento "${result.file.name}"!`, file: result.file }] };
+      }
       return { replies: [`Feito! ${JSON.stringify(result)}`] };
     }
 

@@ -46,4 +46,21 @@ describe('reply', () => {
 
     expect(client.call).toHaveBeenCalledWith('imbot.v2.Chat.InputAction.notify', expect.objectContaining({ duration: 60 }));
   });
+
+  it('calls imbot.v2.Chat.Message.send with a FILE attachment block when replying with a file', async () => {
+    const client = { call: vi.fn().mockResolvedValue({ result: { id: 1 } }) };
+    const { replyWithFile } = createReplyer({ client, botId: 456, botToken: 'my_bot_token' });
+
+    await replyWithFile('dialog-42', 'Aqui está o relatório!', { name: 'relatorio.pdf', downloadUrl: 'https://x/download', size: 1024 });
+
+    expect(client.call).toHaveBeenCalledWith('imbot.v2.Chat.Message.send', {
+      botId: 456,
+      botToken: 'my_bot_token',
+      dialogId: 'dialog-42',
+      fields: {
+        message: 'Aqui está o relatório!',
+        attach: { BLOCKS: [{ FILE: [{ NAME: 'relatorio.pdf', LINK: 'https://x/download', SIZE: 1024 }] }] },
+      },
+    });
+  });
 });

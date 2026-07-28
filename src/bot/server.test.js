@@ -6,9 +6,10 @@ import { parseMsnTalkEvent } from '../msntalk/webhook-handler.js';
 function setup({ handleMessageImpl, allowed = true } = {}) {
   const agentLoop = { handleMessage: vi.fn(handleMessageImpl ?? (async () => ({ replies: ['ok'] }))) };
   const reply = vi.fn().mockResolvedValue();
+  const replyWithFile = vi.fn().mockResolvedValue();
   const rateLimiter = { checkAndConsume: vi.fn(() => (allowed ? { allowed: true } : { allowed: false, scope: 'user' })) };
-  const app = createApp({ botConfig: { botId: 456, botToken: 'secret-token' }, agentLoop, reply, rateLimiter });
-  return { app, agentLoop, reply, rateLimiter };
+  const app = createApp({ botConfig: { botId: 456, botToken: 'secret-token' }, agentLoop, reply, replyWithFile, rateLimiter });
+  return { app, agentLoop, reply, replyWithFile, rateLimiter };
 }
 
 function eventBody(overrides = {}) {
@@ -55,6 +56,15 @@ describe('POST /bitrix-events', () => {
     expect(res.status).toBe(200);
     expect(agentLoop.handleMessage).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(reply).toHaveBeenCalledWith('dialog-1', expect.stringMatching(/aguard/i)));
+  });
+
+  it('sends a file-attachment reply via replyWithFile when a reply item includes a file', async () => {
+    const file = { name: 'relatorio.pdf', downloadUrl: 'https://x/download', size: 1024 };
+    const { app, replyWithFile } = setup({ handleMessageImpl: async () => ({ replies: [{ message: 'Pronto!', file }] }) });
+    const res = await request(app).post('/bitrix-events').send(eventBody());
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(replyWithFile).toHaveBeenCalledWith('dialog-1', 'Pronto!', file));
   });
 
   it('replies with a friendly error and never throws when the agent loop fails', async () => {
