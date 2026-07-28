@@ -22,4 +22,28 @@ describe('reply', () => {
 
     await expect(reply('dialog-42', 'oi')).rejects.toThrow('boom');
   });
+
+  it('calls imbot.v2.Chat.InputAction.notify with the bot id, bot token, dialog id, status code and duration', async () => {
+    const client = { call: vi.fn().mockResolvedValue({ result: { result: true } }) };
+    const { notifyAction } = createReplyer({ client, botId: 456, botToken: 'my_bot_token' });
+
+    await notifyAction('dialog-42', 'IMBOT_AGENT_ACTION_THINKING', 30);
+
+    expect(client.call).toHaveBeenCalledWith('imbot.v2.Chat.InputAction.notify', {
+      botId: 456,
+      botToken: 'my_bot_token',
+      dialogId: 'dialog-42',
+      statusMessageCode: 'IMBOT_AGENT_ACTION_THINKING',
+      duration: 30,
+    });
+  });
+
+  it('defaults notifyAction duration to 60 seconds', async () => {
+    const client = { call: vi.fn().mockResolvedValue({ result: { result: true } }) };
+    const { notifyAction } = createReplyer({ client, botId: 456, botToken: 'my_bot_token' });
+
+    await notifyAction('dialog-42', 'IMBOT_AGENT_ACTION_SEARCHING');
+
+    expect(client.call).toHaveBeenCalledWith('imbot.v2.Chat.InputAction.notify', expect.objectContaining({ duration: 60 }));
+  });
 });

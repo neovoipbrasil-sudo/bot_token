@@ -8,5 +8,14 @@ export function createReplyer({ client, botId, botToken }) {
         fields: { message },
       });
     },
+    async notifyAction(dialogId, statusMessageCode, duration = 60) {
+      return client.call('imbot.v2.Chat.InputAction.notify', {
+        botId,
+        botToken,
+        dialogId,
+        statusMessageCode,
+        duration,
+      });
+    },
   };
 }

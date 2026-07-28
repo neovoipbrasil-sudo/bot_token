@@ -49,6 +49,23 @@ describe('agent-loop — pending confirmation branch', () => {
     expect(replies.join(' ')).toMatch(/99/);
   });
 
+  it('clears the pending action and surfaces the real error when the tool execution fails', async () => {
+    stores._pendingData.set('dialog-1', { tool: 'tasks_create', params: { fields: { TITLE: 'Teste' } }, summary: 'Criar tarefa "Teste"' });
+
+    const anthropic = { messages: { create: vi.fn().mockResolvedValue(claudeJsonResponse({ category: 'confirm', updatedParams: null })) } };
+    const apiError = Object.assign(new Error('Request failed with status code 400'), {
+      response: { data: { error: 'ERROR_CORE', error_description: 'O responsável não foi especificado.' } },
+    });
+    const executedTool = vi.fn().mockRejectedValue(apiError);
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    const { replies } = await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'sim' });
+
+    expect(stores.pendingActions.clearPending).toHaveBeenCalledWith('dialog-1');
+    expect(stores.auditLog.logAction).toHaveBeenCalledWith(expect.objectContaining({ tool: 'tasks_create', result: 'error' }));
+    expect(replies[0]).toContain('O responsável não foi especificado.');
+  });
+
   it('discards the pending action without executing anything when the user refuses', async () => {
     stores._pendingData.set('dialog-1', { tool: 'crm_create', params: {}, summary: 'Criar lead X' });
 
@@ -128,6 +145,25 @@ describe('agent-loop — new request branch', () => {
     expect(replies).toEqual(['Entraram 5 leads essa semana.']);
   });
 
+  it('defaults RESPONSIBLE_ID to the requesting user when creating a task without one specified', async () => {
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [
+        { type: 'text', text: 'Vou criar a tarefa "Teste".' },
+        { type: 'tool_use', id: 'call_1', name: 'tasks_create', input: { fields: { TITLE: 'Teste' } } },
+      ],
+    });
+    const executedTool = vi.fn();
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'cria uma tarefa de teste' });
+
+    expect(stores.pendingActions.setPending).toHaveBeenCalledWith('dialog-1', expect.objectContaining({
+      params: { fields: { TITLE: 'Teste', RESPONSIBLE_ID: 'u1' } },
+    }));
+  });
+
   it('does not execute a sensitive tool directly — sets a pending action and asks for confirmation', async () => {
     const anthropic = { messages: { create: vi.fn() } };
     anthropic.messages.create.mockResolvedValueOnce({
@@ -164,5 +200,42 @@ describe('agent-loop — new request branch', () => {
 
     const firstCallArgs = anthropic.messages.create.mock.calls[0][0];
     expect(firstCallArgs.system).toMatch(/Departamento Comercial|departamento Comercial/);
+  });
+
+  it('includes prior conversation history from the same dialog in the messages sent to Claude', async () => {
+    const conversationHistory = {
+      loadHistory: vi.fn(() => [
+        { role: 'user', content: 'quantos leads eu tenho?' },
+        { role: 'assistant', content: 'Você tem 5 leads.' },
+      ]),
+      appendExchange: vi.fn(),
+    };
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'São os mesmos 5 de antes.' }] })
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+    const loop = createAgentLoop({ anthropic, ...stores, conversationHistory, toolExecutor: vi.fn() });
+
+    await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'e quantos são desse mês?' });
+
+    const firstCallArgs = anthropic.messages.create.mock.calls[0][0];
+    expect(firstCallArgs.messages).toEqual([
+      { role: 'user', content: 'quantos leads eu tenho?' },
+      { role: 'assistant', content: 'Você tem 5 leads.' },
+      { role: 'user', content: 'e quantos são desse mês?' },
+    ]);
+  });
+
+  it('appends the exchange to conversation history after a final text reply', async () => {
+    const conversationHistory = { loadHistory: vi.fn(() => []), appendExchange: vi.fn() };
+    const anthropic = { messages: { create: vi.fn() } };
+    anthropic.messages.create
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Olá! Como posso ajudar?' }] })
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+    const loop = createAgentLoop({ anthropic, ...stores, conversationHistory, toolExecutor: vi.fn() });
+
+    await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'oi' });
+
+    expect(conversationHistory.appendExchange).toHaveBeenCalledWith('dialog-1', 'oi', 'Olá! Como posso ajudar?');
   });
 });

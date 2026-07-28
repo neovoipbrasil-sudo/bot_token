@@ -5,9 +5,20 @@ describe('tool-registry', () => {
   it('exposes exactly the curated set of tools', () => {
     const names = TOOLS.map(t => t.name).sort();
     expect(names).toEqual([
+      'bizproc_list', 'bizproc_start',
       'calendar_create', 'calendar_list',
+      'chat_send',
       'crm_create', 'crm_delete', 'crm_get', 'crm_list', 'crm_update',
+      'departments_list',
+      'disk_file_get', 'disk_file_upload', 'disk_folder_list', 'disk_storages',
+      'feed_post',
+      'groups_list',
+      'notify_send',
+      'products_create', 'products_get', 'products_list', 'products_sections', 'products_update',
+      'read_custom_fields', 'read_pipelines',
       'tasks_create', 'tasks_list',
+      'telephony_calls',
+      'users_list',
     ]);
   });
 
@@ -21,6 +32,27 @@ describe('tool-registry', () => {
     expect(getTool('crm_delete').sensitive).toBe(true);
     expect(getTool('tasks_create').sensitive).toBe(true);
     expect(getTool('calendar_create').sensitive).toBe(true);
+
+    expect(getTool('users_list').sensitive).toBe(false);
+    expect(getTool('departments_list').sensitive).toBe(false);
+    expect(getTool('disk_storages').sensitive).toBe(false);
+    expect(getTool('disk_folder_list').sensitive).toBe(false);
+    expect(getTool('disk_file_get').sensitive).toBe(false);
+    expect(getTool('disk_file_upload').sensitive).toBe(true);
+    expect(getTool('groups_list').sensitive).toBe(false);
+    expect(getTool('bizproc_list').sensitive).toBe(false);
+    expect(getTool('telephony_calls').sensitive).toBe(false);
+    expect(getTool('feed_post').sensitive).toBe(true);
+    expect(getTool('notify_send').sensitive).toBe(true);
+    expect(getTool('chat_send').sensitive).toBe(true);
+    expect(getTool('bizproc_start').sensitive).toBe(true);
+    expect(getTool('products_list').sensitive).toBe(false);
+    expect(getTool('products_get').sensitive).toBe(false);
+    expect(getTool('products_sections').sensitive).toBe(false);
+    expect(getTool('products_create').sensitive).toBe(true);
+    expect(getTool('products_update').sensitive).toBe(true);
+    expect(getTool('read_pipelines').sensitive).toBe(false);
+    expect(getTool('read_custom_fields').sensitive).toBe(false);
   });
 
   it('converts every tool into a valid Claude tool definition', () => {
