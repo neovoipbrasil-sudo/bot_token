@@ -70,6 +70,39 @@ describe('findCrmEntity', () => {
     });
   });
 
+  it('falls back to a lead linked to the matched contact when the contact has no open deal', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [10], LEAD: [] } },
+      'crm.deal.list': { result: [] },
+      'crm.lead.list': { result: [{ ID: 222 }] },
+    });
+
+    const found = await findCrmEntity(client, '556121090177');
+
+    expect(found).toEqual({ entity: 'lead', entity_id: 222 });
+    expect(client.call).toHaveBeenCalledWith('crm.lead.list', {
+      filter: { CONTACT_ID: [10], STATUS_SEMANTIC_ID: 'P' },
+      order: { DATE_CREATE: 'DESC' },
+      select: ['ID'],
+    });
+  });
+
+  it('combines ID and CONTACT_ID with OR logic when both a direct lead and a contact-linked lead match', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [10], LEAD: [30] } },
+      'crm.deal.list': { result: [] },
+      'crm.lead.list': { result: [{ ID: 111 }] },
+    });
+
+    await findCrmEntity(client, '556121090177');
+
+    expect(client.call).toHaveBeenCalledWith('crm.lead.list', {
+      filter: { LOGIC: 'OR', 0: { ID: [30] }, 1: { CONTACT_ID: [10] }, STATUS_SEMANTIC_ID: 'P' },
+      order: { DATE_CREATE: 'DESC' },
+      select: ['ID'],
+    });
+  });
+
   it('returns null when nothing matches the phone at all', async () => {
     const client = makeClient({
       'crm.duplicate.findbycomm': { result: {} },

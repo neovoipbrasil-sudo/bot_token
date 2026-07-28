@@ -30,9 +30,23 @@ export async function findCrmEntity(client, phone) {
     }
   }
 
-  if (leadIds.length > 0) {
+  if (leadIds.length > 0 || contactIds.length > 0) {
+    const filter = { STATUS_SEMANTIC_ID: 'P' };
+    if (leadIds.length > 0 && contactIds.length > 0) {
+      filter.LOGIC = 'OR';
+      filter[0] = { ID: leadIds };
+      filter[1] = { CONTACT_ID: contactIds };
+    } else if (leadIds.length > 0) {
+      filter.ID = leadIds;
+    } else {
+      // The phone matched a Contact but not a Deal — the Contact may still be
+      // linked to an open Lead (Lead.CONTACT_ID) even though the Lead itself
+      // has no PHONE of its own, so findbycomm never surfaced it directly.
+      filter.CONTACT_ID = contactIds;
+    }
+
     const leadRes = await client.call('crm.lead.list', {
-      filter: { ID: leadIds, STATUS_SEMANTIC_ID: 'P' },
+      filter,
       order: { DATE_CREATE: 'DESC' },
       select: ['ID'],
     });
