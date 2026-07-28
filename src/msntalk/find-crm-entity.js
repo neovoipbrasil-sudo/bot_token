@@ -1,5 +1,7 @@
+import { phoneVariants } from './normalize-phone.js';
+
 export async function findCrmEntity(client, phone) {
-  const dupRes = await client.call('crm.duplicate.findbycomm', { type: 'PHONE', values: [phone] });
+  const dupRes = await client.call('crm.duplicate.findbycomm', { type: 'PHONE', values: phoneVariants(phone) });
   const matches = dupRes.result ?? {};
   const contactIds = matches.CONTACT ?? [];
   const companyIds = matches.COMPANY ?? [];
