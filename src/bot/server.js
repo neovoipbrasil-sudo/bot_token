@@ -7,6 +7,7 @@ export function createApp({
   agentLoop,
   reply,
   notifyAction = async () => {},
+  replyWithFile = async (dialogId, message) => reply(dialogId, message),
   rateLimiter,
   bitrixClient,
   auditLog,
@@ -52,7 +53,10 @@ export function createApp({
 
       try {
         const { replies } = await agentLoop.handleMessage({ userId, dialogId, text });
-        for (const msg of replies) await reply(dialogId, msg);
+        for (const msg of replies) {
+          if (typeof msg === 'string') await reply(dialogId, msg);
+          else await replyWithFile(dialogId, msg.message, msg.file);
+        }
       } catch (err) {
         console.error('bitrix-events: handleMessage failed:', err.message);
         await reply(dialogId, 'Não consegui processar sua mensagem agora, tenta de novo em instantes.');

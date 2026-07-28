@@ -12,6 +12,7 @@ describe('tool-registry', () => {
       'departments_list',
       'disk_file_get', 'disk_file_upload', 'disk_folder_list', 'disk_storages',
       'feed_post',
+      'generate_document',
       'groups_list',
       'notify_send',
       'products_create', 'products_get', 'products_list', 'products_sections', 'products_update',
@@ -53,6 +54,7 @@ describe('tool-registry', () => {
     expect(getTool('products_update').sensitive).toBe(true);
     expect(getTool('read_pipelines').sensitive).toBe(false);
     expect(getTool('read_custom_fields').sensitive).toBe(false);
+    expect(getTool('generate_document').sensitive).toBe(true);
   });
 
   it('converts every tool into a valid Claude tool definition', () => {

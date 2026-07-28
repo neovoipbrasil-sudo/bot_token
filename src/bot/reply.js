@@ -17,5 +17,18 @@ export function createReplyer({ client, botId, botToken }) {
         duration,
       });
     },
+    async replyWithFile(dialogId, message, file) {
+      return client.call('imbot.v2.Chat.Message.send', {
+        botId,
+        botToken,
+        dialogId,
+        fields: {
+          message,
+          attach: {
+            BLOCKS: [{ FILE: [{ NAME: file.name, LINK: file.downloadUrl, SIZE: file.size }] }],
+          },
+        },
+      });
+    },
   };
 }
