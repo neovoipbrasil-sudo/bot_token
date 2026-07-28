@@ -15,7 +15,9 @@ function extractJson(response) {
   return JSON.parse(textBlock.text);
 }
 
-export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, model = 'claude-sonnet-5', toolExecutor }) {
+const NOOP_CONVERSATION_HISTORY = { loadHistory: () => [], appendExchange: () => {} };
+
+export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, conversationHistory = NOOP_CONVERSATION_HISTORY, model = 'claude-sonnet-5', toolExecutor }) {
   async function executeTool(name, params) {
     if (toolExecutor) return toolExecutor(name, params);
     return getTool(name).handler(params);
@@ -47,8 +49,14 @@ export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, m
     const { category, updatedParams } = extractJson(classifyResponse);
 
     if (category === 'confirm') {
-      const result = await executeTool(pending.tool, pending.params);
       pendingActions.clearPending(dialogId);
+      let result;
+      try {
+        result = await executeTool(pending.tool, pending.params);
+      } catch (err) {
+        auditLog.logAction({ userId, dialogId, tool: pending.tool, params: pending.params, result: 'error', error: err.message });
+        return { replies: [`Não consegui executar: ${err.response?.data?.error_description || err.message}`] };
+      }
       auditLog.logAction({ userId, dialogId, tool: pending.tool, params: pending.params, result });
       await evaluateMemory({ userId, interactionSummary: `Usuário confirmou e o assistente executou: ${pending.summary}. Resultado: ${JSON.stringify(result)}.` });
       return { replies: [`Feito! ${JSON.stringify(result)}`] };
@@ -77,13 +85,15 @@ export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, m
       ? `Fatos conhecidos sobre este usuário (use para não pedir informação que ele já deu antes):\n${facts.map(f => `- ${f.fact} (${f.howToApply})`).join('\n')}`
       : '';
 
-    const messages = [{ role: 'user', content: text }];
+    const messages = [...conversationHistory.loadHistory(dialogId), { role: 'user', content: text }];
 
     while (true) {
       const response = await anthropic.messages.create({
         model,
         max_tokens: 1024,
-        system: `Você é o assistente do Bitrix24. Interprete o pedido do usuário e use as ferramentas disponíveis para executá-lo. ${factsBlock}`,
+        system: `Você é o assistente do Bitrix24, conversando por chat com um usuário do portal. Interprete o pedido dele e use as ferramentas disponíveis para executá-lo.
+Ao responder em texto para o usuário (não em tool_call): seja caloroso e direto, escreva em português do Brasil, e formate a resposta para ser fácil de ler no chat — use **negrito** para números e nomes importantes, e listas com "-" quando houver múltiplos itens. Evite respostas secas de uma linha quando há dados a mostrar; contextualize brevemente o resultado. Não invente dados que não vieram de uma ferramenta.
+${factsBlock}`,
         tools: toolsForClaude(),
         messages,
       });
@@ -91,12 +101,17 @@ export function createAgentLoop({ anthropic, pendingActions, memory, auditLog, m
       if (response.stop_reason !== 'tool_use') {
         const textBlock = response.content.find(b => b.type === 'text');
         const replyText = textBlock ? textBlock.text : '(sem resposta)';
+        conversationHistory.appendExchange(dialogId, text, replyText);
         await evaluateMemory({ userId, interactionSummary: `Pedido do usuário: "${text}". Resposta do assistente: "${replyText}".` });
         return { replies: [replyText] };
       }
 
       const toolUseBlock = response.content.find(b => b.type === 'tool_use');
       const tool = getTool(toolUseBlock.name);
+
+      if (tool.name === 'tasks_create' && !toolUseBlock.input.fields?.RESPONSIBLE_ID) {
+        toolUseBlock.input.fields = { ...toolUseBlock.input.fields, RESPONSIBLE_ID: userId };
+      }
 
       if (tool.sensitive) {
         const introBlock = response.content.find(b => b.type === 'text');

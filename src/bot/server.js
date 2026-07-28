@@ -6,6 +6,7 @@ export function createApp({
   botConfig,
   agentLoop,
   reply,
+  notifyAction = async () => {},
   rateLimiter,
   bitrixClient,
   auditLog,
@@ -47,10 +48,13 @@ export function createApp({
         return;
       }
 
+      notifyAction(dialogId, 'IMBOT_AGENT_ACTION_THINKING', 60).catch(() => {});
+
       try {
         const { replies } = await agentLoop.handleMessage({ userId, dialogId, text });
         for (const msg of replies) await reply(dialogId, msg);
       } catch (err) {
+        console.error('bitrix-events: handleMessage failed:', err.message);
         await reply(dialogId, 'Não consegui processar sua mensagem agora, tenta de novo em instantes.');
       }
     }
