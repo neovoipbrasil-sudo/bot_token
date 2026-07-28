@@ -158,3 +158,15 @@ export async function timelineAdd({ entity, entity_id, comment, webhook_url }) {
   });
   return { portal: client.portal, entity, entity_id, comment_id: res.result, success: true };
 }
+
+export const timelineCommentUpdateSchema = z.object({
+  id: z.union([z.string(), z.number()]).describe('ID del comentario devuelto por timelineAdd'),
+  comment: z.string(),
+  webhook_url: z.string().url().optional(),
+});
+
+export async function timelineCommentUpdate({ id, comment, webhook_url }) {
+  const client = new Bitrix24Client(resolveWebhook(webhook_url));
+  await client.call('crm.timeline.comment.update', { id, fields: { COMMENT: comment } });
+  return { portal: client.portal, id, success: true };
+}

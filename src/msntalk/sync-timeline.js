@@ -1,9 +1,20 @@
-import { timelineAdd } from '../tools/crm.js';
+import { timelineAdd, timelineCommentUpdate } from '../tools/crm.js';
 import { findCrmEntity } from './find-crm-entity.js';
 
 const DIRECTION_LABEL = { inbound: 'Cliente', outbound: 'SDR' };
 
-export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate }) {
+// Teto de mensagens guardadas por conversa — evita que o comentário cresça
+// sem limite em atendimentos longos; mensagens mais antigas vão caindo.
+const MAX_LINES = 30;
+
+function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
+  const parts = [`[MSN Talk] Ticket #${ticketId}`];
+  if (ticketUrlTemplate) parts.push(ticketUrlTemplate.replace('{ticketId}', ticketId));
+  parts.push('', ...lines);
+  return parts.join('\n');
+}
+
+export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore }) {
   const found = await findCrmEntity(client, event.phone);
 
   if (!found) {
@@ -15,11 +26,17 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate 
     return { matched: false };
   }
 
-  let comment = `[MSN Talk] ${DIRECTION_LABEL[event.direction]}: ${event.text}`;
-  if (ticketUrlTemplate) {
-    comment += `\n${ticketUrlTemplate.replace('{ticketId}', event.ticketId)}`;
+  const thread = threadStore.getThread(event.ticketId) ?? { commentId: null, lines: [] };
+  const lines = [...thread.lines, `${DIRECTION_LABEL[event.direction]}: ${event.text}`].slice(-MAX_LINES);
+  const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
+
+  if (thread.commentId) {
+    await timelineCommentUpdate({ id: thread.commentId, comment });
+    threadStore.saveThread(event.ticketId, { commentId: thread.commentId, lines });
+  } else {
+    const { comment_id } = await timelineAdd({ entity: found.entity, entity_id: found.entity_id, comment });
+    threadStore.saveThread(event.ticketId, { commentId: comment_id, lines });
   }
 
-  await timelineAdd({ entity: found.entity, entity_id: found.entity_id, comment });
   return { matched: true, entity: found.entity, entity_id: found.entity_id };
 }
