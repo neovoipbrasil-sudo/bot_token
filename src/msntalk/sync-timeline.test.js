@@ -12,6 +12,9 @@ vi.mock('../tools/crm.js', () => ({
 
 const { syncTimeline } = await import('./sync-timeline.js');
 
+// 2026-07-28T20:11:00.000Z == 28/07 17:11 em America/Sao_Paulo (UTC-3)
+const TS = '2026-07-28T20:11:00.000Z';
+
 function baseEvent(overrides = {}) {
   return {
     phone: '556121090177',
@@ -19,6 +22,8 @@ function baseEvent(overrides = {}) {
     direction: 'inbound',
     ticketId: 92315,
     protocol: '2026200710580392315',
+    contactName: 'Maria Souza',
+    timestamp: TS,
     ...overrides,
   };
 }
@@ -49,20 +54,39 @@ describe('syncTimeline', () => {
     expect(timelineAddMock).toHaveBeenCalledWith({
       entity: 'deal',
       entity_id: 555,
-      comment: '[MSN Talk] Ticket #92315\n\nCliente: Bom dia',
+      comment: '[MSN Talk] Ticket #92315\n\n[28/07 17:11] Maria Souza: Bom dia',
     });
     expect(timelineCommentUpdateMock).not.toHaveBeenCalled();
-    expect(threadStore.saveThread).toHaveBeenCalledWith(92315, { commentId: 297878, lines: ['Cliente: Bom dia'] });
+    expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
+      commentId: 297878,
+      lines: ['[28/07 17:11] Maria Souza: Bom dia'],
+    });
     expect(auditLog.logAction).not.toHaveBeenCalled();
+  });
+
+  it('falls back to "Cliente" when the ticket has no WhatsApp contact name', async () => {
+    findCrmEntityMock.mockResolvedValueOnce({ entity: 'deal', entity_id: 555 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+
+    await syncTimeline({ event: baseEvent({ contactName: null }), client: {}, auditLog, threadStore });
+
+    expect(timelineAddMock).toHaveBeenCalledWith({
+      entity: 'deal',
+      entity_id: 555,
+      comment: '[MSN Talk] Ticket #92315\n\n[28/07 17:11] Cliente: Bom dia',
+    });
   });
 
   it('updates the existing comment instead of creating a new one for a known ticket', async () => {
     findCrmEntityMock.mockResolvedValueOnce({ entity: 'lead', entity_id: 111 });
-    const threadStore = makeThreadStore({ 92315: { commentId: 297878, lines: ['Cliente: Bom dia'] } });
+    const threadStore = makeThreadStore({
+      92315: { commentId: 297878, lines: ['[28/07 17:11] Maria Souza: Bom dia'] },
+    });
     const auditLog = { logAction: vi.fn() };
 
     await syncTimeline({
-      event: baseEvent({ direction: 'outbound', text: 'Já te respondo' }),
+      event: baseEvent({ direction: 'outbound', text: 'Já te respondo', timestamp: '2026-07-28T20:13:00.000Z' }),
       client: {},
       auditLog,
       threadStore,
@@ -71,11 +95,11 @@ describe('syncTimeline', () => {
     expect(timelineAddMock).not.toHaveBeenCalled();
     expect(timelineCommentUpdateMock).toHaveBeenCalledWith({
       id: 297878,
-      comment: '[MSN Talk] Ticket #92315\n\nCliente: Bom dia\nSDR: Já te respondo',
+      comment: '[MSN Talk] Ticket #92315\n\n[28/07 17:11] Maria Souza: Bom dia\n[28/07 17:13] SDR: Já te respondo',
     });
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
       commentId: 297878,
-      lines: ['Cliente: Bom dia', 'SDR: Já te respondo'],
+      lines: ['[28/07 17:11] Maria Souza: Bom dia', '[28/07 17:13] SDR: Já te respondo'],
     });
   });
 
@@ -95,13 +119,13 @@ describe('syncTimeline', () => {
     expect(timelineAddMock).toHaveBeenCalledWith({
       entity: 'deal',
       entity_id: 555,
-      comment: '[MSN Talk] Ticket #92315\nhttps://app.msntalk.neovoip.com.br/atendimento?ticketId=92315\n\nCliente: Bom dia',
+      comment: '[MSN Talk] Ticket #92315\nhttps://app.msntalk.neovoip.com.br/atendimento?ticketId=92315\n\n[28/07 17:11] Maria Souza: Bom dia',
     });
   });
 
   it('keeps only the most recent 30 lines once the thread grows past the cap', async () => {
     findCrmEntityMock.mockResolvedValueOnce({ entity: 'lead', entity_id: 111 });
-    const existingLines = Array.from({ length: 30 }, (_, i) => `Cliente: msg ${i}`);
+    const existingLines = Array.from({ length: 30 }, (_, i) => `[28/07 17:${String(i).padStart(2, '0')}] Maria Souza: msg ${i}`);
     const threadStore = makeThreadStore({ 92315: { commentId: 297878, lines: existingLines } });
     const auditLog = { logAction: vi.fn() };
 
@@ -109,8 +133,8 @@ describe('syncTimeline', () => {
 
     const savedLines = threadStore.saveThread.mock.calls[0][1].lines;
     expect(savedLines).toHaveLength(30);
-    expect(savedLines[0]).toBe('Cliente: msg 1');
-    expect(savedLines.at(-1)).toBe('Cliente: msg nova');
+    expect(savedLines[0]).toBe(existingLines[1]);
+    expect(savedLines.at(-1)).toBe('[28/07 17:11] Maria Souza: msg nova');
   });
 
   it('logs to the audit log and skips the timeline entirely when no CRM entity matches', async () => {

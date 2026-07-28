@@ -102,7 +102,7 @@ describe('POST /msntalk-events/:secret', () => {
 
     const body = {
       method: 'message',
-      msg: { fromMe: false, text: 'oi' },
+      msg: { fromMe: false, text: 'oi', timestamp: 1784556288057 },
       ticket: { id: 1, protocol: 'p1', contact: { number: '5511999999999' } },
     };
     const res = await request(app).post('/msntalk-events/right-secret').send(body);
@@ -113,6 +113,7 @@ describe('POST /msntalk-events/:secret', () => {
       client: expect.anything(),
       auditLog: expect.anything(),
       ticketUrlTemplate: undefined,
+      threadStore: undefined,
     }));
   });
 

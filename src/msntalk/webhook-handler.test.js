@@ -15,7 +15,7 @@ describe('parseMsnTalkEvent', () => {
   it('normalizes an inbound customer message (method: message, fromMe: false)', () => {
     const event = parseMsnTalkEvent({
       method: 'message',
-      msg: { fromMe: false, text: 'Bom dia', body: 'Bom dia', from: '556121090177' },
+      msg: { fromMe: false, text: 'Bom dia', body: 'Bom dia', from: '556121090177', timestamp: 1784556288057 },
       ticket: ticketFixture(),
     });
 
@@ -25,18 +25,21 @@ describe('parseMsnTalkEvent', () => {
       direction: 'inbound',
       ticketId: 92315,
       protocol: '2026200710580392315',
+      contactName: 'Fulano',
+      timestamp: new Date(1784556288057).toISOString(),
     });
   });
 
   it('normalizes an outbound agent message sent from the panel (method: message, fromMe: true)', () => {
     const event = parseMsnTalkEvent({
       method: 'message',
-      msg: { fromMe: true, text: 'Já te respondo', body: 'Já te respondo' },
+      msg: { fromMe: true, text: 'Já te respondo', body: 'Já te respondo', timestamp: 1784556300000 },
       ticket: ticketFixture(),
     });
 
     expect(event.direction).toBe('outbound');
     expect(event.text).toBe('Já te respondo');
+    expect(event.timestamp).toBe(new Date(1784556300000).toISOString());
   });
 
   it('falls back to msg.body when msg.text is missing', () => {
@@ -49,6 +52,40 @@ describe('parseMsnTalkEvent', () => {
     expect(event.text).toBe('só tem body');
   });
 
+  it('falls back to the webhook receipt time when msg.timestamp is missing', () => {
+    const before = Date.now();
+    const event = parseMsnTalkEvent({
+      method: 'message',
+      msg: { fromMe: false, text: 'oi' },
+      ticket: ticketFixture(),
+    });
+    const after = Date.now();
+
+    const parsed = new Date(event.timestamp).getTime();
+    expect(parsed).toBeGreaterThanOrEqual(before);
+    expect(parsed).toBeLessThanOrEqual(after);
+  });
+
+  it('includes the WhatsApp contact name so multi-contact leads/deals can tell senders apart', () => {
+    const event = parseMsnTalkEvent({
+      method: 'message',
+      msg: { fromMe: false, text: 'oi', timestamp: 1784556288057 },
+      ticket: ticketFixture({ contact: { id: 90604, number: '556121090177', name: 'Maria Souza' } }),
+    });
+
+    expect(event.contactName).toBe('Maria Souza');
+  });
+
+  it('sets contactName to null when the ticket has no contact name', () => {
+    const event = parseMsnTalkEvent({
+      method: 'message',
+      msg: { fromMe: false, text: 'oi', timestamp: 1784556288057 },
+      ticket: ticketFixture({ contact: { id: 90604, number: '556121090177' } }),
+    });
+
+    expect(event.contactName).toBeNull();
+  });
+
   it('normalizes an outbound reply sent via message_send_uazapi as always outbound', () => {
     const event = parseMsnTalkEvent({
       method: 'message_send_uazapi',
@@ -56,13 +93,13 @@ describe('parseMsnTalkEvent', () => {
       ticket: ticketFixture(),
     });
 
-    expect(event).toEqual({
-      phone: '556121090177',
-      text: '*Gabriel*: Queria confirmar...',
-      direction: 'outbound',
-      ticketId: 92315,
-      protocol: '2026200710580392315',
-    });
+    expect(event.phone).toBe('556121090177');
+    expect(event.text).toBe('*Gabriel*: Queria confirmar...');
+    expect(event.direction).toBe('outbound');
+    expect(event.ticketId).toBe(92315);
+    expect(event.protocol).toBe('2026200710580392315');
+    expect(event.contactName).toBe('Fulano');
+    expect(typeof event.timestamp).toBe('string');
   });
 
   it('returns null for an unknown method', () => {
