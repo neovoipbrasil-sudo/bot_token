@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const findCrmEntityMock = vi.fn();
 const timelineAddMock = vi.fn().mockResolvedValue({ comment_id: 297878, success: true });
 const timelineCommentUpdateMock = vi.fn().mockResolvedValue({ success: true });
+const crmUpdateMock = vi.fn().mockResolvedValue({ success: true });
 
 vi.mock('./find-crm-entity.js', () => ({ findCrmEntity: findCrmEntityMock }));
 vi.mock('../tools/crm.js', () => ({
   timelineAdd: timelineAddMock,
   timelineCommentUpdate: timelineCommentUpdateMock,
+  crmUpdate: crmUpdateMock,
 }));
 
 const { syncTimeline } = await import('./sync-timeline.js');
@@ -41,6 +43,7 @@ describe('syncTimeline', () => {
     findCrmEntityMock.mockClear();
     timelineAddMock.mockClear();
     timelineCommentUpdateMock.mockClear();
+    crmUpdateMock.mockClear();
   });
 
   it('creates a new timeline comment for the first message of a ticket', async () => {
@@ -60,6 +63,11 @@ describe('syncTimeline', () => {
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
       commentId: 297878,
       lines: ['[28/07 17:11] Maria Souza: Bom dia'],
+    });
+    expect(crmUpdateMock).toHaveBeenCalledWith({
+      entity: 'deal',
+      id: 555,
+      fields: { UF_CRM_LASTMSNTALK: TS },
     });
     expect(auditLog.logAction).not.toHaveBeenCalled();
   });
@@ -100,6 +108,11 @@ describe('syncTimeline', () => {
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
       commentId: 297878,
       lines: ['[28/07 17:11] Maria Souza: Bom dia', '[28/07 17:13] SDR: Já te respondo'],
+    });
+    expect(crmUpdateMock).toHaveBeenCalledWith({
+      entity: 'lead',
+      id: 111,
+      fields: { UF_CRM_LASTMSNTALK: '2026-07-28T20:13:00.000Z' },
     });
   });
 
@@ -148,6 +161,7 @@ describe('syncTimeline', () => {
     expect(timelineAddMock).not.toHaveBeenCalled();
     expect(timelineCommentUpdateMock).not.toHaveBeenCalled();
     expect(threadStore.saveThread).not.toHaveBeenCalled();
+    expect(crmUpdateMock).not.toHaveBeenCalled();
     expect(auditLog.logAction).toHaveBeenCalledWith({
       tool: 'msntalk-sync',
       params: { phone: '556121090177', ticketId: 92315 },
