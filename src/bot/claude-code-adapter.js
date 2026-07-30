@@ -40,6 +40,14 @@ function truncate(text, maxLength) {
   return `${text.slice(0, maxLength)}…`;
 }
 
+// The model sometimes wraps its JSON answer in a markdown code fence
+// (```json ... ```) despite being asked for raw JSON. Strip that before parsing.
+function parseJsonLoose(text) {
+  const trimmed = text.trim();
+  const fenced = trimmed.startsWith('```') ? trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/) : null;
+  return JSON.parse(fenced ? fenced[1] : trimmed);
+}
+
 // The full zod-to-json-schema output (verbose nested types + long descriptions
 // with examples) is expensive to repeat on every call across ~25 tools. This
 // keeps only what the model needs to pick reasonable params: name, type,
@@ -88,7 +96,7 @@ export function createClaudeCodeAdapter({ model = 'claude-sonnet-5', run } = {})
     if (jsonSchema) args.push('--json-schema', jsonSchema);
 
     const stdout = await runWithRetryOnEnoent(args, prompt);
-    return JSON.parse(stdout);
+    return parseJsonLoose(stdout);
   }
 
   return {
@@ -117,7 +125,7 @@ export function createClaudeCodeAdapter({ model = 'claude-sonnet-5', run } = {})
         ].join('\n');
 
         const envelope = await runClaude({ prompt, jsonSchema: TOOL_CALL_JSON_SCHEMA });
-        const parsed = envelope.structured_output ?? JSON.parse(envelope.result);
+        const parsed = envelope.structured_output ?? parseJsonLoose(envelope.result);
 
         const content = [];
         if (parsed.text) content.push({ type: 'text', text: parsed.text });
@@ -136,6 +144,15 @@ export function createClaudeCodeAdapter({ model = 'claude-sonnet-5', run } = {})
   };
 }
 
+function extractFailureReason(stdout) {
+  try {
+    const envelope = JSON.parse(stdout);
+    return envelope.result || envelope.error_description || null;
+  } catch {
+    return null;
+  }
+}
+
 function defaultRun(args, prompt) {
   const { ANTHROPIC_API_KEY, ...env } = process.env;
   return new Promise((resolve, reject) => {
@@ -149,7 +166,8 @@ function defaultRun(args, prompt) {
     child.on('error', reject);
     child.on('close', code => {
       if (code !== 0) {
-        const err = new Error(`claude exited with code ${code}`);
+        const reason = extractFailureReason(stdout) || stderr.trim() || '(sem detalhe)';
+        const err = new Error(`claude exited with code ${code}: ${truncate(reason, 300)}`);
         err.stdoutOutput = stdout;
         err.stderrOutput = stderr;
         return reject(err);

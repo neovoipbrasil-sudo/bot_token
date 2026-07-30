@@ -79,6 +79,31 @@ describe('claude-code-adapter', () => {
     expect(prompt).toContain('"id":9');
   });
 
+  it('tolerates the outer CLI envelope being wrapped in a markdown code fence', async () => {
+    const run = vi.fn().mockResolvedValue('```json\n' + JSON.stringify({ result: '{"fact":null}' }) + '\n```');
+    const adapter = createClaudeCodeAdapter({ run });
+
+    const response = await adapter.messages.create({ system: 'sys', messages: [{ role: 'user', content: 'oi' }] });
+
+    expect(response.content).toEqual([{ type: 'text', text: '{"fact":null}' }]);
+  });
+
+  it('tolerates envelope.result being wrapped in a markdown code fence when there is no structured_output', async () => {
+    const run = vi.fn().mockResolvedValue(JSON.stringify({
+      result: '```json\n' + JSON.stringify({ text: null, tool_call: { name: 'crm_list', input: {} } }) + '\n```',
+    }));
+    const adapter = createClaudeCodeAdapter({ run });
+
+    const response = await adapter.messages.create({
+      system: 'sys',
+      tools: [{ name: 'crm_list', description: 'd', input_schema: {} }],
+      messages: [{ role: 'user', content: 'oi' }],
+    });
+
+    expect(response.stop_reason).toBe('tool_use');
+    expect(response.content[0]).toMatchObject({ name: 'crm_list' });
+  });
+
   it('retries once after an ENOENT (transient CLI self-update) and succeeds', async () => {
     const enoentError = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
     const run = vi.fn()
