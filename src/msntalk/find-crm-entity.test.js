@@ -103,6 +103,28 @@ describe('findCrmEntity', () => {
     });
   });
 
+  it('falls back to a lead linked to the matched contact\'s company when the contact itself is not wired to any lead', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [8670], LEAD: [] } },
+      'crm.deal.list': { result: [] },
+      'crm.contact.list': { result: [{ ID: 8670, COMPANY_ID: 2184 }] },
+      'crm.lead.list': { result: [{ ID: 4290 }] },
+    });
+
+    const found = await findCrmEntity(client, '5521974392638');
+
+    expect(found).toEqual({ entity: 'lead', entity_id: 4290 });
+    expect(client.call).toHaveBeenCalledWith('crm.contact.list', {
+      filter: { ID: [8670] },
+      select: ['ID', 'COMPANY_ID'],
+    });
+    expect(client.call).toHaveBeenCalledWith('crm.lead.list', {
+      filter: { LOGIC: 'OR', 0: { CONTACT_ID: [8670] }, 1: { COMPANY_ID: [2184] }, STATUS_SEMANTIC_ID: 'P' },
+      order: { DATE_CREATE: 'DESC' },
+      select: ['ID'],
+    });
+  });
+
   it('returns null when nothing matches the phone at all', async () => {
     const client = makeClient({
       'crm.duplicate.findbycomm': { result: {} },
