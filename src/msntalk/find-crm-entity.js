@@ -30,19 +30,31 @@ export async function findCrmEntity(client, phone) {
     }
   }
 
-  if (leadIds.length > 0 || contactIds.length > 0) {
+  // The phone may belong to a Contact who isn't the one wired to the Lead
+  // (e.g. a colleague at the same company messaging in) — the Lead itself
+  // has no PHONE of its own, so findbycomm never surfaces it directly, but
+  // it can still be reached via COMPANY_ID.
+  let contactCompanyIds = [];
+  if (contactIds.length > 0) {
+    const contactRes = await client.call('crm.contact.list', {
+      filter: { ID: contactIds },
+      select: ['ID', 'COMPANY_ID'],
+    });
+    contactCompanyIds = [...new Set((contactRes.result ?? []).map(c => c.COMPANY_ID).filter(Boolean))];
+  }
+
+  if (leadIds.length > 0 || contactIds.length > 0 || contactCompanyIds.length > 0) {
     const filter = { STATUS_SEMANTIC_ID: 'P' };
-    if (leadIds.length > 0 && contactIds.length > 0) {
+    const orClauses = [];
+    if (leadIds.length > 0) orClauses.push({ ID: leadIds });
+    if (contactIds.length > 0) orClauses.push({ CONTACT_ID: contactIds });
+    if (contactCompanyIds.length > 0) orClauses.push({ COMPANY_ID: contactCompanyIds });
+
+    if (orClauses.length > 1) {
       filter.LOGIC = 'OR';
-      filter[0] = { ID: leadIds };
-      filter[1] = { CONTACT_ID: contactIds };
-    } else if (leadIds.length > 0) {
-      filter.ID = leadIds;
+      orClauses.forEach((clause, i) => { filter[i] = clause; });
     } else {
-      // The phone matched a Contact but not a Deal — the Contact may still be
-      // linked to an open Lead (Lead.CONTACT_ID) even though the Lead itself
-      // has no PHONE of its own, so findbycomm never surfaced it directly.
-      filter.CONTACT_ID = contactIds;
+      Object.assign(filter, orClauses[0]);
     }
 
     const leadRes = await client.call('crm.lead.list', {
