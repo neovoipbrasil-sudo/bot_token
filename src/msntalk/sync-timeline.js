@@ -1,9 +1,36 @@
-import { timelineAdd, timelineCommentUpdate, crmUpdate } from '../tools/crm.js';
+import { timelineAdd, timelineCommentUpdate, crmUpdate, crmCreate } from '../tools/crm.js';
 import { findCrmEntity } from './find-crm-entity.js';
 
 // Teto de mensagens guardadas por conversa — evita que o comentário cresça
 // sem limite em atendimentos longos; mensagens mais antigas vão caindo.
 const MAX_LINES = 30;
+
+// Mensagens de abertura padrão do site indicam um lead novo: se o telefone
+// não bate com nada no CRM (found === null) e o texto é exatamente uma
+// dessas frases, criamos Contact + Deal em vez de só logar "no-match".
+const NEW_DEAL_TRIGGERS = [
+  'Olá, vim pelo site e gostaria de mais informações.',
+];
+
+async function createDealFromSiteMessage(event) {
+  const { created_id: contactId } = await crmCreate({
+    entity: 'contact',
+    fields: {
+      NAME: event.contactName || 'Contato via site',
+      PHONE: [{ VALUE: event.phone, VALUE_TYPE: 'WORK' }],
+    },
+  });
+
+  const { created_id: dealId } = await crmCreate({
+    entity: 'deal',
+    fields: {
+      TITLE: `Site — ${event.contactName || event.phone}`,
+      CONTACT_ID: contactId,
+    },
+  });
+
+  return { entity: 'deal', entity_id: dealId };
+}
 
 // Campo customizado criado em Lead e Deal (crm.lead.userfield.add /
 // crm.deal.userfield.add) só pra alimentar a coluna "Última msg MSN Talk"
@@ -44,7 +71,16 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
 }
 
 export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore }) {
-  const found = await findCrmEntity(client, event.phone);
+  let found = await findCrmEntity(client, event.phone);
+
+  if (!found && NEW_DEAL_TRIGGERS.includes(event.text?.trim())) {
+    found = await createDealFromSiteMessage(event);
+    auditLog.logAction({
+      tool: 'msntalk-sync',
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_id },
+      result: 'deal-created',
+    });
+  }
 
   if (!found) {
     auditLog.logAction({
