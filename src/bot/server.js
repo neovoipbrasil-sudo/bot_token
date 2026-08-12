@@ -64,7 +64,22 @@ export function createApp({
     // Ack immediately — same "fast ack, process after" pattern as /bitrix-events.
     res.status(200).send('ok');
 
-    const event = parseMsnTalkEvent(req.body);
+    // parseMsnTalkEvent já quebrou em produção com um payload inesperado
+    // (timestamp inválido) e derrubou a mensagem sem deixar rastro — esse
+    // try/catch garante que qualquer falha futura de parsing pelo menos vira
+    // um registro no audit log em vez de sumir em silêncio.
+    let event;
+    try {
+      event = parseMsnTalkEvent(req.body);
+    } catch (err) {
+      console.error('msntalk-events: parseMsnTalkEvent failed', err);
+      auditLog.logAction({
+        tool: 'msntalk-sync',
+        params: { rawTicketId: req.body?.ticket?.id },
+        result: 'error',
+      });
+      return;
+    }
     if (!event) return;
 
     syncTimeline({

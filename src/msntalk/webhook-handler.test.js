@@ -66,6 +66,20 @@ describe('parseMsnTalkEvent', () => {
     expect(parsed).toBeLessThanOrEqual(after);
   });
 
+  it('falls back to the webhook receipt time instead of throwing when msg.timestamp is malformed', () => {
+    const before = Date.now();
+    const event = parseMsnTalkEvent({
+      method: 'message',
+      msg: { fromMe: false, text: 'oi', timestamp: 'not-a-real-timestamp' },
+      ticket: ticketFixture(),
+    });
+    const after = Date.now();
+
+    const parsed = new Date(event.timestamp).getTime();
+    expect(parsed).toBeGreaterThanOrEqual(before);
+    expect(parsed).toBeLessThanOrEqual(after);
+  });
+
   it('includes the WhatsApp contact name so multi-contact leads/deals can tell senders apart', () => {
     const event = parseMsnTalkEvent({
       method: 'message',
