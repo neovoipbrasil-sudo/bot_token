@@ -30,4 +30,14 @@ describe('readAttachment', () => {
     expect(axios.get).toHaveBeenCalled();
     expect(result.text).toContain('ok');
   });
+
+  it('extracts plain text for txt/csv/md attachments', async () => {
+    axios.get.mockResolvedValue({ data: Buffer.from('nome,status\nMaria,Novo', 'utf-8') });
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.csv',
+      filename: 'clientes.csv',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+    expect(result.text).toContain('nome,status\nMaria,Novo');
+  });
 });

@@ -72,3 +72,5 @@ export async function readAttachment({ url, filename, size, portalHost }) {
     return { text: `[Anexo: ${filename}]\nNão consegui ler esse anexo: ${err.message}`, truncated: false };
   }
 }
+
+registerExtractor(['txt', 'csv', 'md'], async buffer => buffer.toString('utf-8'));
