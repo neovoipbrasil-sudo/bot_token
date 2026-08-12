@@ -1,5 +1,6 @@
 import axios from 'axios';
 import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 
 export const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 20_000;
@@ -79,4 +80,9 @@ registerExtractor(['txt', 'csv', 'md'], async buffer => buffer.toString('utf-8')
 registerExtractor(['pdf'], async buffer => {
   const data = await pdfParse(buffer);
   return data.text;
+});
+
+registerExtractor(['docx'], async buffer => {
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
 });

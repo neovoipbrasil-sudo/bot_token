@@ -6,6 +6,7 @@ vi.mock('axios');
 vi.mock('pdf-parse', () => ({
   default: vi.fn(),
 }));
+vi.mock('mammoth');
 
 describe('readAttachment', () => {
   beforeEach(() => {
@@ -56,5 +57,19 @@ describe('readAttachment', () => {
     });
 
     expect(result.text).toContain('Contrato de prestação de serviços');
+  });
+
+  it('extracts text from docx attachments via mammoth', async () => {
+    const mammothModule = await import('mammoth');
+    axios.get.mockResolvedValue({ data: Buffer.from('fake-docx-bytes') });
+    mammothModule.default.extractRawText.mockResolvedValue({ value: 'Termos e condições do contrato...' });
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.docx',
+      filename: 'termos.docx',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toContain('Termos e condições do contrato');
   });
 });
