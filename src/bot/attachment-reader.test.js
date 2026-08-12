@@ -121,4 +121,18 @@ describe('readAttachment', () => {
     expect(result.text).toContain('Print de tela mostrando um erro 500');
     expect(spawn).toHaveBeenCalledWith('claude', expect.arrayContaining(['-p', '--output-format', 'json']), expect.objectContaining({ cwd: expect.any(String) }));
   });
+
+  it('tolerates markdown-fenced JSON from the claude CLI when describing images', async () => {
+    axios.get.mockResolvedValue({ data: Buffer.from('fake-jpg-bytes') });
+    const fenced = '```json\n' + JSON.stringify({ result: 'Foto de um crachá de identificação.' }) + '\n```';
+    spawn.mockReturnValue(fakeChildProcess(fenced));
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.jpg',
+      filename: 'cracha.jpg',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toContain('Foto de um crachá de identificação');
+  });
 });

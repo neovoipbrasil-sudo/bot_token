@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { parseJsonLoose } from './claude-code-adapter.js';
 
 export const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 20_000;
@@ -135,7 +136,7 @@ async function describeImage(buffer, extension) {
     const imagePath = path.join(dir, `imagem.${extension}`);
     await writeFile(imagePath, buffer);
     const stdout = await runClaudeOnImage(imagePath);
-    const envelope = JSON.parse(stdout);
+    const envelope = parseJsonLoose(stdout);
     return envelope.result;
   } finally {
     await rm(dir, { recursive: true, force: true });
