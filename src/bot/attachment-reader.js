@@ -1,4 +1,5 @@
 import axios from 'axios';
+import pdfParse from 'pdf-parse';
 
 export const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 20_000;
@@ -74,3 +75,8 @@ export async function readAttachment({ url, filename, size, portalHost }) {
 }
 
 registerExtractor(['txt', 'csv', 'md'], async buffer => buffer.toString('utf-8'));
+
+registerExtractor(['pdf'], async buffer => {
+  const data = await pdfParse(buffer);
+  return data.text;
+});

@@ -3,6 +3,9 @@ import axios from 'axios';
 import { readAttachment, registerExtractor } from './attachment-reader.js';
 
 vi.mock('axios');
+vi.mock('pdf-parse', () => ({
+  default: vi.fn(),
+}));
 
 describe('readAttachment', () => {
   beforeEach(() => {
@@ -39,5 +42,19 @@ describe('readAttachment', () => {
       portalHost: 'minhaempresa.bitrix24.com.br',
     });
     expect(result.text).toContain('nome,status\nMaria,Novo');
+  });
+
+  it('extracts text from pdf attachments via pdf-parse', async () => {
+    const pdfParseModule = await import('pdf-parse');
+    axios.get.mockResolvedValue({ data: Buffer.from('fake-pdf-bytes') });
+    pdfParseModule.default.mockResolvedValue({ text: 'Contrato de prestação de serviços...' });
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.pdf',
+      filename: 'contrato.pdf',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toContain('Contrato de prestação de serviços');
   });
 });
