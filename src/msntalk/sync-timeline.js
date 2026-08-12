@@ -7,29 +7,28 @@ const MAX_LINES = 30;
 
 // Mensagens de abertura padrão do site indicam um lead novo: se o telefone
 // não bate com nada no CRM (found === null) e o texto é exatamente uma
-// dessas frases, criamos Contact + Deal em vez de só logar "no-match".
-const NEW_DEAL_TRIGGERS = [
+// dessas frases, criamos um Lead na etapa "Inbound" em vez de só logar
+// "no-match".
+const NEW_LEAD_TRIGGERS = [
   'Olá, vim pelo site e gostaria de mais informações.',
 ];
 
-async function createDealFromSiteMessage(event) {
-  const { created_id: contactId } = await crmCreate({
-    entity: 'contact',
-    fields: {
-      NAME: event.contactName || 'Contato via site',
-      PHONE: [{ VALUE: event.phone, VALUE_TYPE: 'WORK' }],
-    },
-  });
+// STATUS_ID da etapa "Inbound" no funil de Leads deste portal
+// (crm.status.list, ENTITY_ID=STATUS).
+const INBOUND_LEAD_STATUS_ID = 'UC_33H9R1';
 
-  const { created_id: dealId } = await crmCreate({
-    entity: 'deal',
+async function createLeadFromSiteMessage(event) {
+  const { created_id: leadId } = await crmCreate({
+    entity: 'lead',
     fields: {
       TITLE: `Site — ${event.contactName || event.phone}`,
-      CONTACT_ID: contactId,
+      NAME: event.contactName || 'Contato via site',
+      PHONE: [{ VALUE: event.phone, VALUE_TYPE: 'WORK' }],
+      STATUS_ID: INBOUND_LEAD_STATUS_ID,
     },
   });
 
-  return { entity: 'deal', entity_id: dealId };
+  return { entity: 'lead', entity_id: leadId };
 }
 
 // Campo customizado criado em Lead e Deal (crm.lead.userfield.add /
@@ -73,12 +72,12 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
 export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore }) {
   let found = await findCrmEntity(client, event.phone);
 
-  if (!found && NEW_DEAL_TRIGGERS.includes(event.text?.trim())) {
-    found = await createDealFromSiteMessage(event);
+  if (!found && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
+    found = await createLeadFromSiteMessage(event);
     auditLog.logAction({
       tool: 'msntalk-sync',
       params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_id },
-      result: 'deal-created',
+      result: 'lead-created',
     });
   }
 
