@@ -153,11 +153,10 @@ describe('syncTimeline', () => {
     expect(savedLines.at(-1)).toBe('[28/07 17:11] Maria Souza: msg nova');
   });
 
-  it('creates a Contact and a Deal when an unmatched phone sends the exact site opening message', async () => {
+  it('creates a Lead in the Inbound stage when an unmatched phone sends the exact site opening message', async () => {
     findCrmEntityMock.mockResolvedValueOnce(null);
-    crmCreateMock
-      .mockResolvedValueOnce({ created_id: 9001 }) // contact
-      .mockResolvedValueOnce({ created_id: 9002 }); // deal
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9002 }); // lead
+
     const threadStore = makeThreadStore();
     const auditLog = { logAction: vi.fn() };
 
@@ -169,27 +168,28 @@ describe('syncTimeline', () => {
     });
 
     expect(crmCreateMock).toHaveBeenCalledWith({
-      entity: 'contact',
-      fields: { NAME: 'Maria Souza', PHONE: [{ VALUE: '556121090177', VALUE_TYPE: 'WORK' }] },
+      entity: 'lead',
+      fields: {
+        TITLE: 'Site — Maria Souza',
+        NAME: 'Maria Souza',
+        PHONE: [{ VALUE: '556121090177', VALUE_TYPE: 'WORK' }],
+        STATUS_ID: 'UC_33H9R1',
+      },
     });
-    expect(crmCreateMock).toHaveBeenCalledWith({
-      entity: 'deal',
-      fields: { TITLE: 'Site — Maria Souza', CONTACT_ID: 9001 },
-    });
-    expect(result).toEqual({ matched: true, entity: 'deal', entity_id: 9002 });
+    expect(result).toEqual({ matched: true, entity: 'lead', entity_id: 9002 });
     expect(timelineAddMock).toHaveBeenCalledWith({
-      entity: 'deal',
+      entity: 'lead',
       entity_id: 9002,
       comment: expect.stringContaining('Olá, vim pelo site e gostaria de mais informações.'),
     });
     expect(auditLog.logAction).toHaveBeenCalledWith({
       tool: 'msntalk-sync',
       params: { phone: '556121090177', ticketId: 92315, entity_id: 9002 },
-      result: 'deal-created',
+      result: 'lead-created',
     });
   });
 
-  it('does not create a Deal for an unmatched phone sending a message that only resembles the site trigger', async () => {
+  it('does not create a Lead for an unmatched phone sending a message that only resembles the site trigger', async () => {
     findCrmEntityMock.mockResolvedValueOnce(null);
     const threadStore = makeThreadStore();
     const auditLog = { logAction: vi.fn() };
@@ -210,7 +210,7 @@ describe('syncTimeline', () => {
     });
   });
 
-  it('does not create a Deal for the site trigger message when the phone already matches a CRM entity', async () => {
+  it('does not create a Lead for the site trigger message when the phone already matches a CRM entity', async () => {
     findCrmEntityMock.mockResolvedValueOnce({ entity: 'deal', entity_id: 555 });
     const threadStore = makeThreadStore();
     const auditLog = { logAction: vi.fn() };
