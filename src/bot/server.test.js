@@ -147,4 +147,27 @@ describe('POST /msntalk-events/:secret', () => {
       result: 'error',
     }));
   });
+
+  it('responds 200 and logs an error audit-log entry instead of crashing when parseMsnTalkEvent throws', async () => {
+    vi.doMock('../msntalk/webhook-handler.js', () => ({
+      parseMsnTalkEvent: () => { throw new RangeError('Invalid time value'); },
+    }));
+    const auditLog = { logAction: vi.fn() };
+    const { app, syncTimeline } = await setupMsnTalk({ auditLog });
+
+    const body = {
+      method: 'message',
+      msg: { fromMe: false, text: 'oi', timestamp: 'garbage' },
+      ticket: { id: 99, protocol: 'p1', contact: { number: '5511999999999' } },
+    };
+    const res = await request(app).post('/msntalk-events/right-secret').send(body);
+
+    expect(res.status).toBe(200);
+    expect(syncTimeline).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(auditLog.logAction).toHaveBeenCalledWith({
+      tool: 'msntalk-sync',
+      params: { rawTicketId: 99 },
+      result: 'error',
+    }));
+  });
 });
