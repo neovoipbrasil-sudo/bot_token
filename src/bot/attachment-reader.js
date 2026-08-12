@@ -1,6 +1,7 @@
 import axios from 'axios';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import ExcelJS from 'exceljs';
 
 export const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 20_000;
@@ -85,4 +86,17 @@ registerExtractor(['pdf'], async buffer => {
 registerExtractor(['docx'], async buffer => {
   const result = await mammoth.extractRawText({ buffer });
   return result.value;
+});
+
+registerExtractor(['xlsx'], async buffer => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const lines = [];
+  workbook.eachSheet(sheet => {
+    lines.push(`# ${sheet.name}`);
+    sheet.eachRow(row => {
+      lines.push(row.values.slice(1).map(v => (v ?? '').toString()).join('\t'));
+    });
+  });
+  return lines.join('\n');
 });

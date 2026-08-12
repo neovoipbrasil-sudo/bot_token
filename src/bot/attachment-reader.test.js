@@ -72,4 +72,24 @@ describe('readAttachment', () => {
 
     expect(result.text).toContain('Termos e condições do contrato');
   });
+
+  it('extracts tabular text from xlsx attachments via exceljs', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Vendas');
+    sheet.addRow(['Nome', 'Status']);
+    sheet.addRow(['Maria', 'Novo']);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    axios.get.mockResolvedValue({ data: buffer });
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.xlsx',
+      filename: 'vendas.xlsx',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toContain('Nome\tStatus');
+    expect(result.text).toContain('Maria\tNovo');
+  });
 });
