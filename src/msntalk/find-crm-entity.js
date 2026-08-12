@@ -6,19 +6,20 @@ import { phoneVariants } from './normalize-phone.js';
 // live portal, where such a filter returned literally every open record
 // instead of the intended intersection. So instead of asking the API to OR
 // several conditions in one call, we issue one call per condition and merge
-// the results ourselves, picking the most recently created match.
-async function mostRecent(client, method, filterClauses) {
-  let best = null;
+// the results ourselves (deduped by ID).
+//
+// A contact/empresa pode ter vários negócios (ou leads) abertos ao mesmo
+// tempo — ex: um "TICKET" novo por atendimento, sem fechar os anteriores.
+// Escolher só "o mais recente" deixava os demais permanentemente sem
+// histórico de conversa; por isso retornamos TODOS os matches abertos e
+// quem chama decide o que fazer com cada um.
+async function collectMatches(client, method, filterClauses) {
+  const byId = new Map();
   for (const filter of filterClauses) {
-    const res = await client.call(method, {
-      filter,
-      order: { DATE_CREATE: 'DESC' },
-      select: ['ID', 'DATE_CREATE'],
-    });
-    const [top] = res.result ?? [];
-    if (top && (!best || top.DATE_CREATE > best.DATE_CREATE)) best = top;
+    const res = await client.call(method, { filter, select: ['ID'] });
+    for (const item of res.result ?? []) byId.set(item.ID, item);
   }
-  return best;
+  return [...byId.values()];
 }
 
 export async function findCrmEntity(client, phone) {
@@ -32,8 +33,8 @@ export async function findCrmEntity(client, phone) {
   if (contactIds.length > 0) dealFilters.push({ CLOSED: 'N', CONTACT_ID: contactIds });
   if (companyIds.length > 0) dealFilters.push({ CLOSED: 'N', COMPANY_ID: companyIds });
   if (dealFilters.length > 0) {
-    const deal = await mostRecent(client, 'crm.deal.list', dealFilters);
-    if (deal) return { entity: 'deal', entity_id: deal.ID };
+    const deals = await collectMatches(client, 'crm.deal.list', dealFilters);
+    if (deals.length > 0) return { entity: 'deal', entity_ids: deals.map((d) => d.ID) };
   }
 
   // The phone may belong to a Contact who isn't the one wired to the Lead
@@ -54,8 +55,8 @@ export async function findCrmEntity(client, phone) {
   if (contactIds.length > 0) leadFilters.push({ STATUS_SEMANTIC_ID: 'P', CONTACT_ID: contactIds });
   if (contactCompanyIds.length > 0) leadFilters.push({ STATUS_SEMANTIC_ID: 'P', COMPANY_ID: contactCompanyIds });
   if (leadFilters.length > 0) {
-    const lead = await mostRecent(client, 'crm.lead.list', leadFilters);
-    if (lead) return { entity: 'lead', entity_id: lead.ID };
+    const leads = await collectMatches(client, 'crm.lead.list', leadFilters);
+    if (leads.length > 0) return { entity: 'lead', entity_ids: leads.map((l) => l.ID) };
   }
 
   return null;
