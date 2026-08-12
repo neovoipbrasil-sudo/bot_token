@@ -28,7 +28,7 @@ async function createLeadFromSiteMessage(event) {
     },
   });
 
-  return { entity: 'lead', entity_id: leadId };
+  return { entity: 'lead', entity_ids: [leadId] };
 }
 
 // Campo customizado criado em Lead e Deal (crm.lead.userfield.add /
@@ -76,7 +76,7 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
     found = await createLeadFromSiteMessage(event);
     auditLog.logAction({
       tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_id },
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_ids[0] },
       result: 'lead-created',
     });
   }
@@ -90,23 +90,38 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
     return { matched: false };
   }
 
-  const thread = threadStore.getThread(event.ticketId) ?? { commentId: null, lines: [] };
-  const lines = [...thread.lines, buildLine(event)].slice(-MAX_LINES);
+  // Um contato/empresa pode ter vários negócios (ou leads) abertos ao mesmo
+  // tempo (ex: um "TICKET" novo por atendimento, sem fechar os anteriores),
+  // então sincronizamos a mesma mensagem na timeline de TODOS os matches
+  // abertos, não só no mais recente.
+  const rawThread = threadStore.getThread(event.ticketId);
+  // Threads antigas guardavam um único commentId (de quando só existia um
+  // match por ticket); migramos preservando esse comentário para o primeiro
+  // entity_id da lista, e criamos comentários novos para os demais.
+  const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
+  const comments = rawThread?.comments ?? {};
+  const lines = [...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
   const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
 
-  if (thread.commentId) {
-    await timelineCommentUpdate({ id: thread.commentId, comment });
-    threadStore.saveThread(event.ticketId, { commentId: thread.commentId, lines });
-  } else {
-    const { comment_id } = await timelineAdd({ entity: found.entity, entity_id: found.entity_id, comment });
-    threadStore.saveThread(event.ticketId, { commentId: comment_id, lines });
+  const newComments = {};
+  for (const [index, entityId] of found.entity_ids.entries()) {
+    const existingCommentId = comments[entityId] ?? (index === 0 ? legacyCommentId : null);
+    if (existingCommentId) {
+      await timelineCommentUpdate({ id: existingCommentId, comment });
+      newComments[entityId] = existingCommentId;
+    } else {
+      const { comment_id } = await timelineAdd({ entity: found.entity, entity_id: entityId, comment });
+      newComments[entityId] = comment_id;
+    }
+
+    await crmUpdate({
+      entity: found.entity,
+      id: entityId,
+      fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
+    });
   }
 
-  await crmUpdate({
-    entity: found.entity,
-    id: found.entity_id,
-    fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
-  });
+  threadStore.saveThread(event.ticketId, { comments: newComments, lines });
 
-  return { matched: true, entity: found.entity, entity_id: found.entity_id };
+  return { matched: true, entity: found.entity, entity_ids: found.entity_ids };
 }
