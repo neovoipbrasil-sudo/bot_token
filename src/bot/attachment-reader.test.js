@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
+import { spawn } from 'node:child_process';
 import { readAttachment, registerExtractor } from './attachment-reader.js';
 
 vi.mock('axios');
@@ -7,6 +8,20 @@ vi.mock('pdf-parse', () => ({
   default: vi.fn(),
 }));
 vi.mock('mammoth');
+vi.mock('node:child_process');
+
+function fakeChildProcess(stdout) {
+  const listeners = {};
+  return {
+    stdout: { on: (event, cb) => { if (event === 'data') cb(Buffer.from(stdout)); } },
+    stderr: { on: () => {} },
+    stdin: { write: () => {}, end: () => {} },
+    on: (event, cb) => {
+      listeners[event] = cb;
+      if (event === 'close') cb(0);
+    },
+  };
+}
 
 describe('readAttachment', () => {
   beforeEach(() => {
@@ -91,5 +106,19 @@ describe('readAttachment', () => {
 
     expect(result.text).toContain('Nome\tStatus');
     expect(result.text).toContain('Maria\tNovo');
+  });
+
+  it('describes image attachments via a scoped claude CLI subprocess and cleans up the temp dir', async () => {
+    axios.get.mockResolvedValue({ data: Buffer.from('fake-png-bytes') });
+    spawn.mockReturnValue(fakeChildProcess(JSON.stringify({ result: 'Print de tela mostrando um erro 500 no formulário de checkout.' })));
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.png',
+      filename: 'erro.png',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toContain('Print de tela mostrando um erro 500');
+    expect(spawn).toHaveBeenCalledWith('claude', expect.arrayContaining(['-p', '--output-format', 'json']), expect.objectContaining({ cwd: expect.any(String) }));
   });
 });

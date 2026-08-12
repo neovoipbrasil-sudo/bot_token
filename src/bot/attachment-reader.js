@@ -2,6 +2,10 @@ import axios from 'axios';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import ExcelJS from 'exceljs';
+import { spawn } from 'node:child_process';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 export const MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 20_000;
@@ -67,7 +71,7 @@ export async function readAttachment({ url, filename, size, portalHost }) {
     }
 
     const buffer = await downloadAttachment(url, portalHost);
-    const rawText = await extract(buffer);
+    const rawText = await extract(buffer, ext);
     const { text, truncated } = truncateText(rawText);
     const suffix = truncated ? '\n[...documento truncado, era maior que o limite de leitura]' : '';
     return { text: `[Anexo: ${filename}]\n${text}${suffix}`, truncated };
@@ -100,3 +104,42 @@ registerExtractor(['xlsx'], async buffer => {
   });
   return lines.join('\n');
 });
+
+function runClaudeOnImage(imagePath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', [
+      '-p',
+      '--output-format', 'json',
+      '--no-session-persistence',
+      '--safe-mode',
+      '--allowedTools', 'Read',
+      '--add-dir', path.dirname(imagePath),
+    ], { cwd: path.dirname(imagePath), stdio: ['pipe', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', () => {});
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) return reject(new Error(`claude exited with code ${code} ao descrever imagem`));
+      resolve(stdout);
+    });
+    child.stdin.write(`Leia o arquivo de imagem "${path.basename(imagePath)}" com a ferramenta Read e descreva objetivamente o que está escrito e visível nele, em português do Brasil.`);
+    child.stdin.end();
+  });
+}
+
+async function describeImage(buffer, extension) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bot-attachment-'));
+  try {
+    const imagePath = path.join(dir, `imagem.${extension}`);
+    await writeFile(imagePath, buffer);
+    const stdout = await runClaudeOnImage(imagePath);
+    const envelope = JSON.parse(stdout);
+    return envelope.result;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+registerExtractor(['png', 'jpg', 'jpeg'], async (buffer, ext) => describeImage(buffer, ext));
