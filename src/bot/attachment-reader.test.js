@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 import { spawn } from 'node:child_process';
-import { readAttachment, registerExtractor } from './attachment-reader.js';
+import { readAttachment, registerExtractor, truncateText, MAX_DOWNLOAD_BYTES, MAX_TEXT_CHARS } from './attachment-reader.js';
 
 vi.mock('axios');
 vi.mock('pdf-parse', () => ({
@@ -25,6 +25,7 @@ function fakeChildProcess(stdout) {
 
 describe('readAttachment', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     // Register a simple text extractor for testing
     registerExtractor(['txt'], (buffer) => Promise.resolve(buffer.toString('utf-8')));
   });
@@ -134,5 +135,59 @@ describe('readAttachment', () => {
     });
 
     expect(result.text).toContain('Foto de um crachá de identificação');
+  });
+
+  it('rejects an attachment larger than the 15MB download limit without downloading it', async () => {
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.txt',
+      filename: 'grande.txt',
+      size: MAX_DOWNLOAD_BYTES + 1,
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toMatch(/maior que 15MB/i);
+    expect(result.truncated).toBe(false);
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it('reports an unsupported format without attempting to download it', async () => {
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.zip',
+      filename: 'arquivo.zip',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.text).toMatch(/não é suportado/i);
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it('truncates extracted text longer than MAX_TEXT_CHARS and flags it as truncated', async () => {
+    const longText = 'a'.repeat(MAX_TEXT_CHARS + 500);
+    axios.get.mockResolvedValue({ data: Buffer.from(longText, 'utf-8') });
+
+    const result = await readAttachment({
+      url: 'https://minhaempresa.bitrix24.com.br/file.txt',
+      filename: 'longo.txt',
+      portalHost: 'minhaempresa.bitrix24.com.br',
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.text).toContain('[...documento truncado, era maior que o limite de leitura]');
+    expect(result.text.length).toBeLessThan(longText.length);
+  });
+});
+
+describe('truncateText', () => {
+  it('returns text unchanged when at or under the limit', () => {
+    const text = 'a'.repeat(MAX_TEXT_CHARS);
+    const result = truncateText(text);
+    expect(result).toEqual({ text, truncated: false });
+  });
+
+  it('cuts text down to MAX_TEXT_CHARS and marks it truncated when over the limit', () => {
+    const text = 'a'.repeat(MAX_TEXT_CHARS + 100);
+    const result = truncateText(text);
+    expect(result.text).toHaveLength(MAX_TEXT_CHARS);
+    expect(result.truncated).toBe(true);
   });
 });
