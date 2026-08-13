@@ -30,7 +30,7 @@ Built and maintained by **[Bit2Beat](https://bit2beat.com)** — Bitrix24 specia
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) **18 or higher**
+- [Node.js](https://nodejs.org) **20.16 or higher**
 - [Claude Desktop](https://claude.ai/download) or [Claude Code](https://claude.ai/code)
 - A Bitrix24 incoming webhook URL
 
