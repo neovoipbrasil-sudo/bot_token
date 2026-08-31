@@ -3,13 +3,13 @@ import request from 'supertest';
 import { createApp } from './server.js';
 import { parseMsnTalkEvent } from '../msntalk/webhook-handler.js';
 
-function setup({ handleMessageImpl, allowed = true } = {}) {
+function setup({ handleMessageImpl, allowed = true, bitrixClient = { call: vi.fn().mockResolvedValue({ result: {} }) } } = {}) {
   const agentLoop = { handleMessage: vi.fn(handleMessageImpl ?? (async () => ({ replies: ['ok'] }))) };
   const reply = vi.fn().mockResolvedValue();
   const replyWithFile = vi.fn().mockResolvedValue();
   const rateLimiter = { checkAndConsume: vi.fn(() => (allowed ? { allowed: true } : { allowed: false, scope: 'user' })) };
-  const app = createApp({ botConfig: { botId: 456, botToken: 'secret-token' }, agentLoop, reply, replyWithFile, rateLimiter });
-  return { app, agentLoop, reply, replyWithFile, rateLimiter };
+  const app = createApp({ botConfig: { botId: 456, botToken: 'secret-token' }, agentLoop, reply, replyWithFile, rateLimiter, bitrixClient });
+  return { app, agentLoop, reply, replyWithFile, rateLimiter, bitrixClient };
 }
 
 function eventBody(overrides = {}) {
@@ -73,6 +73,24 @@ describe('POST /bitrix-events', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(reply).toHaveBeenCalledWith('dialog-1', expect.stringMatching(/não consegui|tenta de novo/i)));
+  });
+
+  it('processes an attachment-only message (no text) instead of silently dropping it', async () => {
+    const bitrixClient = { call: vi.fn().mockResolvedValue({ result: { NAME: 'nota.txt', SIZE: 10, DOWNLOAD_URL: 'https://neo-voip.bitrix24.com.br/download/nota.txt' } }) };
+    const { app, agentLoop } = setup({ handleMessageImpl: async () => ({ replies: ['Recebi o arquivo!'] }), bitrixClient });
+    const res = await request(app).post('/bitrix-events').send(eventBody({
+      data: {
+        chat: { id: 5, dialogId: 'dialog-1' },
+        user: { id: 'user-1' },
+        message: { id: 1, text: '', params: { FILE_ID: ['184226'] } },
+      },
+    }));
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(agentLoop.handleMessage).toHaveBeenCalled());
+    expect(bitrixClient.call).toHaveBeenCalledWith('disk.file.get', { id: '184226' });
+    const call = agentLoop.handleMessage.mock.calls[0][0];
+    expect(call.text).toContain('[Anexo: nota.txt]');
   });
 });
 

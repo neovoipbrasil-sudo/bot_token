@@ -42,7 +42,7 @@ function truncate(text, maxLength) {
 
 // The model sometimes wraps its JSON answer in a markdown code fence
 // (```json ... ```) despite being asked for raw JSON. Strip that before parsing.
-function parseJsonLoose(text) {
+export function parseJsonLoose(text) {
   const trimmed = text.trim();
   const fenced = trimmed.startsWith('```') ? trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/) : null;
   return JSON.parse(fenced ? fenced[1] : trimmed);
