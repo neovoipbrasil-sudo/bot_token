@@ -10,6 +10,16 @@ function toIsoTimestamp(value) {
   return new Date().toISOString();
 }
 
+// O MSN Talk às vezes manda msg.text/msg.body como objeto (ex: payload de
+// mídia com legenda) em vez de string. syncTimeline faz event.text.trim(),
+// que estoura TypeError e derruba a mensagem inteira sem sincronizar nada.
+// Normalizamos pra string aqui, na borda, pra nunca propagar um não-string.
+function toMessageText(value) {
+  if (typeof value === 'string') return value;
+  if (value == null) return null;
+  return JSON.stringify(value);
+}
+
 export function parseMsnTalkEvent(body) {
   const ticket = body?.ticket;
   const phone = ticket?.contact?.number;
@@ -20,7 +30,7 @@ export function parseMsnTalkEvent(body) {
   const contactName = ticket.contact?.name || null;
 
   if (body.method === 'message') {
-    const text = body.msg?.text ?? body.msg?.body;
+    const text = toMessageText(body.msg?.text ?? body.msg?.body);
     if (!text) return null;
     return {
       phone,
@@ -37,7 +47,7 @@ export function parseMsnTalkEvent(body) {
   }
 
   if (body.method === 'message_send_uazapi') {
-    const text = body.msg?.message;
+    const text = toMessageText(body.msg?.message);
     if (!text) return null;
     return { phone, text, direction: 'outbound', ticketId, protocol, contactName, timestamp: new Date().toISOString() };
   }
