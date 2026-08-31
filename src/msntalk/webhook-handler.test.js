@@ -135,6 +135,28 @@ describe('parseMsnTalkEvent', () => {
     expect(event).toBeNull();
   });
 
+  it('stringifies msg.text when the MSN Talk payload sends an object instead of a string', () => {
+    const event = parseMsnTalkEvent({
+      method: 'message',
+      msg: { fromMe: false, text: { caption: 'Olha isso', mimetype: 'audio/ogg' }, timestamp: 1784556288057 },
+      ticket: ticketFixture(),
+    });
+
+    expect(typeof event.text).toBe('string');
+    expect(event.text).toBe(JSON.stringify({ caption: 'Olha isso', mimetype: 'audio/ogg' }));
+  });
+
+  it('stringifies msg.message when message_send_uazapi sends an object instead of a string', () => {
+    const event = parseMsnTalkEvent({
+      method: 'message_send_uazapi',
+      msg: { message: { caption: 'áudio enviado' } },
+      ticket: ticketFixture(),
+    });
+
+    expect(typeof event.text).toBe('string');
+    expect(event.text).toBe(JSON.stringify({ caption: 'áudio enviado' }));
+  });
+
   it('returns null when the message text is empty', () => {
     const event = parseMsnTalkEvent({
       method: 'message',
