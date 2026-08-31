@@ -1,5 +1,5 @@
 import axios from 'axios';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import ExcelJS from 'exceljs';
 import { spawn } from 'node:child_process';
@@ -84,8 +84,13 @@ export async function readAttachment({ url, filename, size, portalHost }) {
 registerExtractor(['txt', 'csv', 'md'], async buffer => buffer.toString('utf-8'));
 
 registerExtractor(['pdf'], async buffer => {
-  const data = await pdfParse(buffer);
-  return data.text;
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const result = await parser.getText();
+    return result.text;
+  } finally {
+    await parser.destroy();
+  }
 });
 
 registerExtractor(['docx'], async buffer => {

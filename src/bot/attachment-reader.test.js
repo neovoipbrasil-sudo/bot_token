@@ -5,7 +5,7 @@ import { readAttachment, registerExtractor, truncateText, MAX_DOWNLOAD_BYTES, MA
 
 vi.mock('axios');
 vi.mock('pdf-parse', () => ({
-  default: vi.fn(),
+  PDFParse: vi.fn(),
 }));
 vi.mock('mammoth');
 vi.mock('node:child_process');
@@ -62,9 +62,12 @@ describe('readAttachment', () => {
   });
 
   it('extracts text from pdf attachments via pdf-parse', async () => {
-    const pdfParseModule = await import('pdf-parse');
+    const { PDFParse } = await import('pdf-parse');
     axios.get.mockResolvedValue({ data: Buffer.from('fake-pdf-bytes') });
-    pdfParseModule.default.mockResolvedValue({ text: 'Contrato de prestação de serviços...' });
+    PDFParse.mockImplementation(function () { return {
+      getText: vi.fn().mockResolvedValue({ text: 'Contrato de prestação de serviços...' }),
+      destroy: vi.fn().mockResolvedValue(),
+    }; });
 
     const result = await readAttachment({
       url: 'https://minhaempresa.bitrix24.com.br/file.pdf',
