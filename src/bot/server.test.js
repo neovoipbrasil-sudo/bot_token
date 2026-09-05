@@ -142,6 +142,7 @@ describe('POST /msntalk-events/:secret', () => {
       auditLog: expect.anything(),
       ticketUrlTemplate: undefined,
       threadStore: undefined,
+      pendingStore: undefined,
     }));
   });
 

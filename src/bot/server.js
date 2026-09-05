@@ -15,6 +15,7 @@ export function createApp({
   msntalkWebhookSecret,
   msntalkTicketUrlTemplate,
   msntalkThreadStore,
+  msntalkPendingStore,
 }) {
   const app = express();
   app.use(express.urlencoded({ extended: true }));
@@ -123,6 +124,7 @@ export function createApp({
       auditLog,
       ticketUrlTemplate: msntalkTicketUrlTemplate,
       threadStore: msntalkThreadStore,
+      pendingStore: msntalkPendingStore,
     }).catch((err) => {
       // MSN Talk has no retry mechanism we can hook into, so we can't propagate
       // this error back to the sender — we can only make it observable on our
