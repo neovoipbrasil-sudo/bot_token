@@ -304,4 +304,90 @@ describe('syncTimeline', () => {
       result: 'no-match',
     });
   });
+
+  function makePendingStore(initial = {}) {
+    const data = { ...initial };
+    return {
+      appendPending: vi.fn((phone, line) => {
+        data[phone] = [...(data[phone] ?? []), line];
+      }),
+      takePending: vi.fn((phone) => {
+        const lines = data[phone] ?? [];
+        delete data[phone];
+        return lines;
+      }),
+    };
+  }
+
+  it('stores the message text in pendingStore instead of discarding it when there is no match', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    const threadStore = makeThreadStore();
+    const pendingStore = makePendingStore();
+    const auditLog = { logAction: vi.fn() };
+
+    await syncTimeline({ event: baseEvent(), client: {}, auditLog, threadStore, pendingStore });
+
+    expect(pendingStore.appendPending).toHaveBeenCalledWith(
+      '556121090177',
+      '[28/07 17:11] Maria Souza: Bom dia',
+    );
+  });
+
+  it('backfills pending lines into the timeline once the phone finally matches a CRM entity', async () => {
+    findCrmEntityMock.mockResolvedValueOnce({ entity: 'deal', entity_ids: [555] });
+    const threadStore = makeThreadStore();
+    const pendingStore = makePendingStore({
+      '556121090177': ['[27/07 09:00] Maria Souza: mensagem antiga 1', '[27/07 09:05] Maria Souza: mensagem antiga 2'],
+    });
+    const auditLog = { logAction: vi.fn() };
+
+    await syncTimeline({ event: baseEvent(), client: {}, auditLog, threadStore, pendingStore });
+
+    expect(timelineAddMock).toHaveBeenCalledWith({
+      entity: 'deal',
+      entity_id: 555,
+      comment: [
+        '[MSN Talk] Ticket #92315',
+        '',
+        '[27/07 09:00] Maria Souza: mensagem antiga 1',
+        '[27/07 09:05] Maria Souza: mensagem antiga 2',
+        '[28/07 17:11] Maria Souza: Bom dia',
+      ].join('\n'),
+    });
+    expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
+      comments: { 555: 297878 },
+      lines: [
+        '[27/07 09:00] Maria Souza: mensagem antiga 1',
+        '[27/07 09:05] Maria Souza: mensagem antiga 2',
+        '[28/07 17:11] Maria Souza: Bom dia',
+      ],
+    });
+    expect(auditLog.logAction).toHaveBeenCalledWith({
+      tool: 'msntalk-sync',
+      params: { phone: '556121090177', ticketId: 92315, entity_id: 555, recovered: 2 },
+      result: 'backfill',
+    });
+    expect(pendingStore.takePending).toHaveBeenCalledWith('556121090177');
+  });
+
+  it('does not log a backfill entry when there was nothing pending for the phone', async () => {
+    findCrmEntityMock.mockResolvedValueOnce({ entity: 'deal', entity_ids: [555] });
+    const threadStore = makeThreadStore();
+    const pendingStore = makePendingStore();
+    const auditLog = { logAction: vi.fn() };
+
+    await syncTimeline({ event: baseEvent(), client: {}, auditLog, threadStore, pendingStore });
+
+    expect(auditLog.logAction).not.toHaveBeenCalledWith(expect.objectContaining({ result: 'backfill' }));
+  });
+
+  it('works without pendingStore for backward compatibility', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+
+    const result = await syncTimeline({ event: baseEvent(), client: {}, auditLog, threadStore });
+
+    expect(result).toEqual({ matched: false });
+  });
 });
