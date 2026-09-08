@@ -12,6 +12,7 @@ import { createConversationHistory } from './conversation-history.js';
 import { createAuditLog } from './audit-log.js';
 import { loadBotConfig } from './bot-config.js';
 import { createThreadStore } from '../msntalk/thread-store.js';
+import { createPendingStore } from '../msntalk/pending-store.js';
 
 const PORT = process.env.BOT_PORT || 3300;
 
@@ -40,6 +41,7 @@ if (!msntalkWebhookSecret) {
 }
 const msntalkTicketUrlTemplate = process.env.MSNTALK_TICKET_URL_TEMPLATE;
 const msntalkThreadStore = createThreadStore({ filePath: new URL('./data/msntalk-threads.json', import.meta.url).pathname });
+const msntalkPendingStore = createPendingStore({ filePath: new URL('./data/msntalk-pending.json', import.meta.url).pathname });
 
 const app = createApp({
   botConfig,
@@ -53,6 +55,7 @@ const app = createApp({
   msntalkWebhookSecret,
   msntalkTicketUrlTemplate,
   msntalkThreadStore,
+  msntalkPendingStore,
 });
 
 app.listen(PORT, () => {

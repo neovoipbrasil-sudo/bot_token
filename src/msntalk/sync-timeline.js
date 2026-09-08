@@ -69,7 +69,7 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
   return parts.join('\n');
 }
 
-export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore }) {
+export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore }) {
   let found = await findCrmEntity(client, event.phone);
 
   if (!found && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
@@ -82,12 +82,29 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
   }
 
   if (!found) {
+    // Sem lead/negócio aberto pra esse telefone agora — a mensagem não pode
+    // ir pra timeline ainda, mas guardamos o texto: se esse telefone vier a
+    // casar com um lead/negócio mais tarde (cadastro do número, mudança de
+    // etapa etc.), syncTimeline recupera essas linhas em vez de perdê-las.
+    pendingStore?.appendPending(event.phone, buildLine(event));
     auditLog.logAction({
       tool: 'msntalk-sync',
       params: { phone: event.phone, ticketId: event.ticketId },
       result: 'no-match',
     });
     return { matched: false };
+  }
+
+  // Mensagens que ficaram pendentes desse telefone (de tickets anteriores ou
+  // do início desse mesmo ticket, antes do match funcionar) entram no início
+  // da timeline — recuperação única, feita só quando ainda há algo pendente.
+  const backfillLines = pendingStore?.takePending(event.phone) ?? [];
+  if (backfillLines.length > 0) {
+    auditLog.logAction({
+      tool: 'msntalk-sync',
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_ids[0], recovered: backfillLines.length },
+      result: 'backfill',
+    });
   }
 
   // Um contato/empresa pode ter vários negócios (ou leads) abertos ao mesmo
@@ -100,7 +117,7 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
   // entity_id da lista, e criamos comentários novos para os demais.
   const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
   const comments = rawThread?.comments ?? {};
-  const lines = [...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
+  const lines = [...backfillLines, ...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
   const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
 
   const newComments = {};
