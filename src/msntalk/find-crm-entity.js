@@ -22,7 +22,7 @@ async function collectMatches(client, method, filterClauses) {
   return [...byId.values()];
 }
 
-export async function findCrmEntity(client, phone) {
+export async function findCrmEntity(client, phone, additionalContactsIndex) {
   const dupRes = await client.call('crm.duplicate.findbycomm', { type: 'PHONE', values: phoneVariants(phone) });
   const matches = dupRes.result ?? {};
   const contactIds = matches.CONTACT ?? [];
@@ -57,6 +57,25 @@ export async function findCrmEntity(client, phone) {
   if (leadFilters.length > 0) {
     const leads = await collectMatches(client, 'crm.lead.list', leadFilters);
     if (leads.length > 0) return { entity: 'lead', entity_ids: leads.map((l) => l.ID) };
+  }
+
+  // O contato pode estar vinculado como contato ADICIONAL (não principal) de
+  // um lead/negócio aberto — os filtros acima só enxergam o contato
+  // principal de cada registro. additionalContactsIndex é um cache local
+  // (ver refresh-additional-contacts.js) atualizado periodicamente em
+  // segundo plano, consultado aqui como último recurso.
+  if (additionalContactsIndex && contactIds.length > 0) {
+    const byKey = new Map();
+    for (const contactId of contactIds) {
+      for (const match of additionalContactsIndex.getEntities(contactId)) {
+        byKey.set(`${match.entity}:${match.entity_id}`, match);
+      }
+    }
+    const indexed = [...byKey.values()];
+    const deals = indexed.filter((m) => m.entity === 'deal');
+    if (deals.length > 0) return { entity: 'deal', entity_ids: deals.map((m) => m.entity_id) };
+    const leads = indexed.filter((m) => m.entity === 'lead');
+    if (leads.length > 0) return { entity: 'lead', entity_ids: leads.map((m) => m.entity_id) };
   }
 
   return null;

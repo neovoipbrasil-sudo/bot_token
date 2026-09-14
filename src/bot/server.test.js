@@ -143,6 +143,7 @@ describe('POST /msntalk-events/:secret', () => {
       ticketUrlTemplate: undefined,
       threadStore: undefined,
       pendingStore: undefined,
+      additionalContactsIndex: undefined,
     }));
   });
 
