@@ -4,9 +4,9 @@ import { RateLimiter } from '../utils/rate-limiter.js';
 const MAX_RETRIES = 3;
 
 export class Bitrix24Client {
-  constructor(webhookUrl) {
+  constructor(webhookUrl, { minDelay = 500 } = {}) {
     this.webhookUrl = webhookUrl.endsWith('/') ? webhookUrl : webhookUrl + '/';
-    this.limiter = new RateLimiter(500);
+    this.limiter = new RateLimiter(minDelay);
     this.portal = this._extractPortal(webhookUrl);
   }
 
@@ -38,6 +38,18 @@ export class Bitrix24Client {
           if (err.response?.status === 429 && retries < MAX_RETRIES) {
             const retryAfter = parseInt(err.response.headers['retry-after'] || '2', 10);
             await new Promise(r => setTimeout(r, retryAfter * 1000));
+            retries += 1;
+            continue;
+          }
+          // QUERY_LIMIT_EXCEEDED vem com HTTP 503 (não 429) e sem header
+          // Retry-After — observado em produção durante o job de varredura
+          // de contatos adicionais, indicando uma cota mais estrita (por
+          // minuto, não só por segundo) do que a do rate limiter local.
+          // Backoff bem mais longo que o do 429 para dar tempo dessa cota
+          // esvaziar antes de tentar de novo.
+          if (err.response?.status === 503 && retries < MAX_RETRIES) {
+            const backoff = Math.pow(2, retries) * 5000;
+            await new Promise(r => setTimeout(r, backoff));
             retries += 1;
             continue;
           }

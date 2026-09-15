@@ -48,6 +48,47 @@ describe('Bitrix24Client', () => {
     ).rejects.toMatchObject({ response: { status: 429 } });
   });
 
+  it('retries on 503 QUERY_LIMIT_EXCEEDED with a longer backoff than 429', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/');
+
+      postMock
+        .mockRejectedValueOnce({ response: { status: 503, data: { error: 'QUERY_LIMIT_EXCEEDED' } } })
+        .mockResolvedValueOnce({ data: { result: 'ok-after-503' } });
+
+      const promise = client.call('crm.deal.contact.items.get');
+      await vi.advanceTimersByTimeAsync(5000);
+
+      await expect(promise).resolves.toEqual({ result: 'ok-after-503' });
+      expect(postMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws after exhausting retries on repeated 503s without hanging', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/');
+      postMock.mockRejectedValue({ response: { status: 503, data: { error: 'QUERY_LIMIT_EXCEEDED' } } });
+
+      const promise = client.call('crm.deal.contact.items.get');
+      const assertion = expect(promise).rejects.toMatchObject({ response: { status: 503 } });
+      await vi.advanceTimersByTimeAsync(5000 + 10000 + 20000);
+      await assertion;
+
+      expect(postMock).toHaveBeenCalledTimes(4); // 1 tentativa original + 3 retries
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('paces requests using a custom minDelay when provided', async () => {
+    const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/', { minDelay: 1500 });
+    expect(client.limiter.minDelay).toBe(1500);
+  });
+
   it('surfaces a Bitrix24 API error without hanging the queue', async () => {
     const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/');
 
