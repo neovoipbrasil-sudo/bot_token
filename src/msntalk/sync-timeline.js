@@ -69,8 +69,8 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
   return parts.join('\n');
 }
 
-export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore }) {
-  let found = await findCrmEntity(client, event.phone);
+export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
+  let found = await findCrmEntity(client, event.phone, additionalContactsIndex);
 
   if (!found && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
     found = await createLeadFromSiteMessage(event);

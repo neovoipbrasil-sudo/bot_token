@@ -13,6 +13,8 @@ import { createAuditLog } from './audit-log.js';
 import { loadBotConfig } from './bot-config.js';
 import { createThreadStore } from '../msntalk/thread-store.js';
 import { createPendingStore } from '../msntalk/pending-store.js';
+import { createAdditionalContactsIndex } from '../msntalk/additional-contacts-index.js';
+import { refreshAdditionalContacts } from '../msntalk/refresh-additional-contacts.js';
 
 const PORT = process.env.BOT_PORT || 3300;
 
@@ -43,6 +45,21 @@ const msntalkTicketUrlTemplate = process.env.MSNTALK_TICKET_URL_TEMPLATE;
 const msntalkThreadStore = createThreadStore({ filePath: new URL('./data/msntalk-threads.json', import.meta.url).pathname });
 const msntalkPendingStore = createPendingStore({ filePath: new URL('./data/msntalk-pending.json', import.meta.url).pathname });
 
+const msntalkAdditionalContactsIndex = createAdditionalContactsIndex({
+  filePath: new URL('./data/msntalk-additional-contacts.json', import.meta.url).pathname,
+});
+// Cliente Bitrix dedicado a essa varredura em segundo plano — evita que
+// milhares de chamadas do refresh fiquem na frente das sincronizações em
+// tempo real do MSN Talk na fila do rate-limiter (cada client tem a sua).
+const additionalContactsRefreshClient = new Bitrix24Client(resolveWebhook());
+const ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+function runAdditionalContactsRefresh() {
+  refreshAdditionalContacts({ client: additionalContactsRefreshClient, index: msntalkAdditionalContactsIndex })
+    .catch((err) => console.error('msntalk: refreshAdditionalContacts failed', err));
+}
+runAdditionalContactsRefresh();
+setInterval(runAdditionalContactsRefresh, ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS);
+
 const app = createApp({
   botConfig,
   agentLoop,
@@ -56,6 +73,7 @@ const app = createApp({
   msntalkTicketUrlTemplate,
   msntalkThreadStore,
   msntalkPendingStore,
+  msntalkAdditionalContactsIndex,
 });
 
 app.listen(PORT, () => {

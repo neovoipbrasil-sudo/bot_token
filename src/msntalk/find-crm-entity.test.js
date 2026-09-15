@@ -151,4 +151,62 @@ describe('findCrmEntity', () => {
 
     expect(found).toBeNull();
   });
+
+  it('falls back to additionalContactsIndex when the contact is only an additional (non-primary) contact of a lead', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [9062], LEAD: [] } },
+      'crm.deal.list': { result: [] },
+      'crm.contact.list': { result: [{ ID: 9062, COMPANY_ID: null }] },
+      'crm.lead.list': { result: [] },
+    });
+    const additionalContactsIndex = { getEntities: vi.fn(() => [{ entity: 'lead', entity_id: 4400 }]) };
+
+    const found = await findCrmEntity(client, '5591984215280', additionalContactsIndex);
+
+    expect(found).toEqual({ entity: 'lead', entity_ids: [4400] });
+    expect(additionalContactsIndex.getEntities).toHaveBeenCalledWith(9062);
+  });
+
+  it('prefers a deal found via additionalContactsIndex over a lead found via the same index', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [9062], LEAD: [] } },
+      'crm.deal.list': { result: [] },
+      'crm.contact.list': { result: [{ ID: 9062, COMPANY_ID: null }] },
+      'crm.lead.list': { result: [] },
+    });
+    const additionalContactsIndex = {
+      getEntities: vi.fn(() => [{ entity: 'lead', entity_id: 4400 }, { entity: 'deal', entity_id: 8876 }]),
+    };
+
+    const found = await findCrmEntity(client, '5591984215280', additionalContactsIndex);
+
+    expect(found).toEqual({ entity: 'deal', entity_ids: [8876] });
+  });
+
+  it('does not consult additionalContactsIndex when a normal match was already found', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [10], LEAD: [] } },
+      'crm.deal.list': { result: [{ ID: 555 }] },
+    });
+    const additionalContactsIndex = { getEntities: vi.fn(() => [{ entity: 'lead', entity_id: 999 }]) };
+
+    const found = await findCrmEntity(client, '556121090177', additionalContactsIndex);
+
+    expect(found).toEqual({ entity: 'deal', entity_ids: [555] });
+    expect(additionalContactsIndex.getEntities).not.toHaveBeenCalled();
+  });
+
+  it('still returns null when additionalContactsIndex has nothing for any matched contact', async () => {
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [9062], LEAD: [] } },
+      'crm.deal.list': { result: [] },
+      'crm.contact.list': { result: [{ ID: 9062, COMPANY_ID: null }] },
+      'crm.lead.list': { result: [] },
+    });
+    const additionalContactsIndex = { getEntities: vi.fn(() => []) };
+
+    const found = await findCrmEntity(client, '5591984215280', additionalContactsIndex);
+
+    expect(found).toBeNull();
+  });
 });
