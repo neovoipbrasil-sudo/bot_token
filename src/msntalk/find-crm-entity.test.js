@@ -14,7 +14,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'deal', entity_ids: [555] });
+    expect(found).toEqual([{ entity: 'deal', entity_ids: [555] }]);
     expect(client.call).toHaveBeenCalledWith('crm.duplicate.findbycomm', { type: 'PHONE', values: ['556121090177'] });
     expect(client.call).toHaveBeenCalledWith('crm.deal.list', {
       filter: { CLOSED: 'N', CONTACT_ID: [10] },
@@ -30,7 +30,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'deal', entity_ids: [777] });
+    expect(found).toEqual([{ entity: 'deal', entity_ids: [777] }]);
     expect(client.call).toHaveBeenCalledWith('crm.deal.list', {
       filter: { CLOSED: 'N', COMPANY_ID: [20] },
       select: ['ID'],
@@ -53,7 +53,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'deal', entity_ids: [111, 999] });
+    expect(found).toEqual([{ entity: 'deal', entity_ids: [111, 999] }]);
     expect(client.call).toHaveBeenCalledWith('crm.deal.list', {
       filter: { CLOSED: 'N', CONTACT_ID: [10] },
       select: ['ID'],
@@ -72,7 +72,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'lead', entity_ids: [111] });
+    expect(found).toEqual([{ entity: 'lead', entity_ids: [111] }]);
     expect(client.call).toHaveBeenCalledWith('crm.lead.list', {
       filter: { STATUS_SEMANTIC_ID: 'P', ID: [30] },
       select: ['ID'],
@@ -89,7 +89,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'lead', entity_ids: [222] });
+    expect(found).toEqual([{ entity: 'lead', entity_ids: [222] }]);
     expect(client.call).toHaveBeenCalledWith('crm.lead.list', {
       filter: { STATUS_SEMANTIC_ID: 'P', CONTACT_ID: [10] },
       select: ['ID'],
@@ -106,7 +106,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '5521974392638');
 
-    expect(found).toEqual({ entity: 'lead', entity_ids: [4290] });
+    expect(found).toEqual([{ entity: 'lead', entity_ids: [4290] }]);
     expect(client.call).toHaveBeenCalledWith('crm.contact.list', {
       filter: { ID: [8670] },
       select: ['ID', 'COMPANY_ID'],
@@ -139,7 +139,26 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177');
 
-    expect(found).toEqual({ entity: 'lead', entity_ids: [30, 111] });
+    expect(found).toEqual([{ entity: 'lead', entity_ids: [30, 111] }]);
+  });
+
+  it('returns both an open deal and an open lead when the same contact has both at once', async () => {
+    // Caso real observado em produção: contato com um Lead antigo nunca
+    // fechado depois que um Negócio foi criado para ele — os dois abertos
+    // ao mesmo tempo, e os dois devem receber a mensagem.
+    const client = makeClient({
+      'crm.duplicate.findbycomm': { result: { CONTACT: [5242], LEAD: [] } },
+      'crm.deal.list': { result: [{ ID: 7028 }] },
+      'crm.contact.list': { result: [{ ID: 5242, COMPANY_ID: null }] },
+      'crm.lead.list': { result: [{ ID: 3118 }] },
+    });
+
+    const found = await findCrmEntity(client, '5533991115865');
+
+    expect(found).toEqual([
+      { entity: 'deal', entity_ids: [7028] },
+      { entity: 'lead', entity_ids: [3118] },
+    ]);
   });
 
   it('returns null when nothing matches the phone at all', async () => {
@@ -163,11 +182,11 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '5591984215280', additionalContactsIndex);
 
-    expect(found).toEqual({ entity: 'lead', entity_ids: [4400] });
+    expect(found).toEqual([{ entity: 'lead', entity_ids: [4400] }]);
     expect(additionalContactsIndex.getEntities).toHaveBeenCalledWith(9062);
   });
 
-  it('prefers a deal found via additionalContactsIndex over a lead found via the same index', async () => {
+  it('returns both a deal and a lead found via additionalContactsIndex', async () => {
     const client = makeClient({
       'crm.duplicate.findbycomm': { result: { CONTACT: [9062], LEAD: [] } },
       'crm.deal.list': { result: [] },
@@ -180,7 +199,10 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '5591984215280', additionalContactsIndex);
 
-    expect(found).toEqual({ entity: 'deal', entity_ids: [8876] });
+    expect(found).toEqual([
+      { entity: 'deal', entity_ids: [8876] },
+      { entity: 'lead', entity_ids: [4400] },
+    ]);
   });
 
   it('does not consult additionalContactsIndex when a normal match was already found', async () => {
@@ -192,7 +214,7 @@ describe('findCrmEntity', () => {
 
     const found = await findCrmEntity(client, '556121090177', additionalContactsIndex);
 
-    expect(found).toEqual({ entity: 'deal', entity_ids: [555] });
+    expect(found).toEqual([{ entity: 'deal', entity_ids: [555] }]);
     expect(additionalContactsIndex.getEntities).not.toHaveBeenCalled();
   });
 

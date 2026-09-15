@@ -70,18 +70,19 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
 }
 
 export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
-  let found = await findCrmEntity(client, event.phone, additionalContactsIndex);
+  let groups = await findCrmEntity(client, event.phone, additionalContactsIndex);
 
-  if (!found && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
-    found = await createLeadFromSiteMessage(event);
+  if (!groups && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
+    const created = await createLeadFromSiteMessage(event);
+    groups = [created];
     auditLog.logAction({
       tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_ids[0] },
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: created.entity_ids[0] },
       result: 'lead-created',
     });
   }
 
-  if (!found) {
+  if (!groups) {
     // Sem lead/negócio aberto pra esse telefone agora — a mensagem não pode
     // ir pra timeline ainda, mas guardamos o texto: se esse telefone vier a
     // casar com um lead/negócio mais tarde (cadastro do número, mudança de
@@ -102,43 +103,54 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
   if (backfillLines.length > 0) {
     auditLog.logAction({
       tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: found.entity_ids[0], recovered: backfillLines.length },
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: groups[0].entity_ids[0], recovered: backfillLines.length },
       result: 'backfill',
     });
   }
 
-  // Um contato/empresa pode ter vários negócios (ou leads) abertos ao mesmo
-  // tempo (ex: um "TICKET" novo por atendimento, sem fechar os anteriores),
-  // então sincronizamos a mesma mensagem na timeline de TODOS os matches
-  // abertos, não só no mais recente.
+  // Um contato pode ter vários negócios/leads abertos ao mesmo tempo — e, num
+  // caso real observado em produção, até um Lead E um Negócio abertos
+  // simultaneamente para o mesmo contato (ex: um Lead antigo nunca fechado
+  // depois que o Negócio foi criado) — então sincronizamos a mesma mensagem
+  // na timeline de TODOS os matches abertos, de todos os tipos, não só no
+  // primeiro.
   const rawThread = threadStore.getThread(event.ticketId);
   // Threads antigas guardavam um único commentId (de quando só existia um
-  // match por ticket); migramos preservando esse comentário para o primeiro
-  // entity_id da lista, e criamos comentários novos para os demais.
+  // match por ticket, sempre do mesmo tipo); migramos preservando esse
+  // comentário para o primeiro entity_id da lista.
   const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
   const comments = rawThread?.comments ?? {};
   const lines = [...backfillLines, ...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
   const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
 
   const newComments = {};
-  for (const [index, entityId] of found.entity_ids.entries()) {
-    const existingCommentId = comments[entityId] ?? (index === 0 ? legacyCommentId : null);
-    if (existingCommentId) {
-      await timelineCommentUpdate({ id: existingCommentId, comment });
-      newComments[entityId] = existingCommentId;
-    } else {
-      const { comment_id } = await timelineAdd({ entity: found.entity, entity_id: entityId, comment });
-      newComments[entityId] = comment_id;
-    }
+  let isFirstEntityOverall = true;
+  for (const group of groups) {
+    for (const entityId of group.entity_ids) {
+      // Chave composta "tipo:id" evita colisão entre um Lead e um Negócio
+      // com o mesmo ID numérico agora que os dois podem coexistir no mesmo
+      // ticket; comments[entityId] (chave antiga, sem o tipo) e
+      // legacyCommentId cobrem registros salvos antes dessa mudança.
+      const key = `${group.entity}:${entityId}`;
+      const existingCommentId = comments[key] ?? comments[entityId] ?? (isFirstEntityOverall ? legacyCommentId : null);
+      if (existingCommentId) {
+        await timelineCommentUpdate({ id: existingCommentId, comment });
+        newComments[key] = existingCommentId;
+      } else {
+        const { comment_id } = await timelineAdd({ entity: group.entity, entity_id: entityId, comment });
+        newComments[key] = comment_id;
+      }
 
-    await crmUpdate({
-      entity: found.entity,
-      id: entityId,
-      fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
-    });
+      await crmUpdate({
+        entity: group.entity,
+        id: entityId,
+        fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
+      });
+      isFirstEntityOverall = false;
+    }
   }
 
   threadStore.saveThread(event.ticketId, { comments: newComments, lines });
 
-  return { matched: true, entity: found.entity, entity_ids: found.entity_ids };
+  return { matched: true, groups };
 }

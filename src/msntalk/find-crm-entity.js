@@ -22,6 +22,12 @@ async function collectMatches(client, method, filterClauses) {
   return [...byId.values()];
 }
 
+// Um mesmo contato pode ter um Lead E um Negócio abertos ao mesmo tempo,
+// ambos genuinamente em uso (ex: um Lead antigo que nunca foi fechado depois
+// que o Negócio foi criado) — caso real observado em produção. Por isso
+// findCrmEntity retorna TODOS os grupos abertos que encontrar (um por tipo
+// de entidade), em vez de parar no primeiro; quem chama decide o que fazer
+// com cada grupo.
 export async function findCrmEntity(client, phone, additionalContactsIndex) {
   const dupRes = await client.call('crm.duplicate.findbycomm', { type: 'PHONE', values: phoneVariants(phone) });
   const matches = dupRes.result ?? {};
@@ -29,12 +35,14 @@ export async function findCrmEntity(client, phone, additionalContactsIndex) {
   const companyIds = matches.COMPANY ?? [];
   const leadIds = matches.LEAD ?? [];
 
+  const groups = [];
+
   const dealFilters = [];
   if (contactIds.length > 0) dealFilters.push({ CLOSED: 'N', CONTACT_ID: contactIds });
   if (companyIds.length > 0) dealFilters.push({ CLOSED: 'N', COMPANY_ID: companyIds });
   if (dealFilters.length > 0) {
     const deals = await collectMatches(client, 'crm.deal.list', dealFilters);
-    if (deals.length > 0) return { entity: 'deal', entity_ids: deals.map((d) => d.ID) };
+    if (deals.length > 0) groups.push({ entity: 'deal', entity_ids: deals.map((d) => d.ID) });
   }
 
   // The phone may belong to a Contact who isn't the one wired to the Lead
@@ -56,15 +64,16 @@ export async function findCrmEntity(client, phone, additionalContactsIndex) {
   if (contactCompanyIds.length > 0) leadFilters.push({ STATUS_SEMANTIC_ID: 'P', COMPANY_ID: contactCompanyIds });
   if (leadFilters.length > 0) {
     const leads = await collectMatches(client, 'crm.lead.list', leadFilters);
-    if (leads.length > 0) return { entity: 'lead', entity_ids: leads.map((l) => l.ID) };
+    if (leads.length > 0) groups.push({ entity: 'lead', entity_ids: leads.map((l) => l.ID) });
   }
 
   // O contato pode estar vinculado como contato ADICIONAL (não principal) de
   // um lead/negócio aberto — os filtros acima só enxergam o contato
   // principal de cada registro. additionalContactsIndex é um cache local
   // (ver refresh-additional-contacts.js) atualizado periodicamente em
-  // segundo plano, consultado aqui como último recurso.
-  if (additionalContactsIndex && contactIds.length > 0) {
+  // segundo plano, consultado aqui como último recurso — só quando nada foi
+  // encontrado pelos caminhos normais (evita duplicar um grupo já achado).
+  if (groups.length === 0 && additionalContactsIndex && contactIds.length > 0) {
     const byKey = new Map();
     for (const contactId of contactIds) {
       for (const match of additionalContactsIndex.getEntities(contactId)) {
@@ -73,10 +82,10 @@ export async function findCrmEntity(client, phone, additionalContactsIndex) {
     }
     const indexed = [...byKey.values()];
     const deals = indexed.filter((m) => m.entity === 'deal');
-    if (deals.length > 0) return { entity: 'deal', entity_ids: deals.map((m) => m.entity_id) };
+    if (deals.length > 0) groups.push({ entity: 'deal', entity_ids: deals.map((m) => m.entity_id) });
     const leads = indexed.filter((m) => m.entity === 'lead');
-    if (leads.length > 0) return { entity: 'lead', entity_ids: leads.map((m) => m.entity_id) };
+    if (leads.length > 0) groups.push({ entity: 'lead', entity_ids: leads.map((m) => m.entity_id) });
   }
 
-  return null;
+  return groups.length > 0 ? groups : null;
 }
