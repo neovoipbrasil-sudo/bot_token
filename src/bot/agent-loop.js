@@ -124,7 +124,12 @@ ${factsBlock}`,
         return { replies: [`${summary} Confirma? (sim/não)`] };
       }
 
-      const result = await executeTool(tool.name, toolUseBlock.input);
+      let result;
+      try {
+        result = await executeTool(tool.name, toolUseBlock.input);
+      } catch (err) {
+        result = { error: err.response?.data?.error_description || err.message };
+      }
       messages.push({ role: 'assistant', content: response.content });
       messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: JSON.stringify(result) }] });
     }

@@ -162,6 +162,35 @@ describe('agent-loop — new request branch', () => {
     expect(replies).toEqual(['Entraram 5 leads essa semana.']);
   });
 
+  it('surfaces a failed read tool call to Claude as a tool_result error instead of throwing', async () => {
+    const anthropic = { messages: { create: vi.fn() } };
+    const apiError = Object.assign(new Error('Request failed with status code 400'), {
+      response: { data: { error: 'ERROR_FILTER', error_description: 'Campo de filtro desconhecido: UF_CRM_CONTRATO.' } },
+    });
+    anthropic.messages.create
+      .mockResolvedValueOnce({
+        stop_reason: 'tool_use',
+        content: [{ type: 'tool_use', id: 'call_1', name: 'crm_list', input: { entity: 'company', filter: { UF_CRM_CONTRATO: 'Y' } } }],
+      })
+      .mockResolvedValueOnce({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'Não encontrei esse campo, pode confirmar o nome do campo de contrato?' }],
+      })
+      .mockResolvedValueOnce(claudeJsonResponse({ fact: null }));
+
+    const executedTool = vi.fn().mockRejectedValue(apiError);
+    const loop = createAgentLoop({ anthropic, ...stores, toolExecutor: executedTool });
+
+    const { replies } = await loop.handleMessage({ userId: 'u1', dialogId: 'dialog-1', text: 'clientes com contrato sem MSN Talk' });
+
+    expect(executedTool).toHaveBeenCalledWith('crm_list', { entity: 'company', filter: { UF_CRM_CONTRATO: 'Y' } });
+    const secondCallMessages = anthropic.messages.create.mock.calls[1][0].messages;
+    const toolResult = secondCallMessages.at(-1).content[0];
+    expect(toolResult.type).toBe('tool_result');
+    expect(toolResult.content).toContain('Campo de filtro desconhecido');
+    expect(replies).toEqual(['Não encontrei esse campo, pode confirmar o nome do campo de contrato?']);
+  });
+
   it('defaults RESPONSIBLE_ID to the requesting user when creating a task without one specified', async () => {
     const anthropic = { messages: { create: vi.fn() } };
     anthropic.messages.create.mockResolvedValueOnce({
