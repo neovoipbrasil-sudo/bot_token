@@ -51,7 +51,13 @@ const msntalkAdditionalContactsIndex = createAdditionalContactsIndex({
 // Cliente Bitrix dedicado a essa varredura em segundo plano — evita que
 // milhares de chamadas do refresh fiquem na frente das sincronizações em
 // tempo real do MSN Talk na fila do rate-limiter (cada client tem a sua).
-const additionalContactsRefreshClient = new Bitrix24Client(resolveWebhook());
+// Só que a cota de chamadas por minuto do Bitrix é por WEBHOOK, não por
+// client — em produção, rodar esse client no ritmo padrão (2 chamadas/s)
+// ao mesmo tempo que o tráfego real do webhook estourou a cota e travou o
+// refresh inteiro com QUERY_LIMIT_EXCEEDED (HTTP 503) logo na primeira
+// tentativa. Por isso esse client roda bem mais devagar (1 chamada a cada
+// 1.5s) — o refresh não é sensível a tempo, mas o tráfego em tempo real é.
+const additionalContactsRefreshClient = new Bitrix24Client(resolveWebhook(), { minDelay: 1500 });
 const ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 function runAdditionalContactsRefresh() {
   refreshAdditionalContacts({ client: additionalContactsRefreshClient, index: msntalkAdditionalContactsIndex })
