@@ -8,10 +8,11 @@ export function createAuditLog(filePath) {
   }
 
   return {
-    logAction({ userId, dialogId, tool, params, result, timestamp = new Date().toISOString() }) {
+    logAction({ userId, dialogId, tool, params, result, error, timestamp = new Date().toISOString() }) {
       ensureDir();
-      const line = JSON.stringify({ userId, dialogId, tool, params, result, timestamp });
-      appendFileSync(filePath, line + '\n', 'utf-8');
+      const entry = { userId, dialogId, tool, params, result, timestamp };
+      if (error !== undefined) entry.error = error;
+      appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf-8');
     },
     readAll() {
       if (!existsSync(filePath)) return [];

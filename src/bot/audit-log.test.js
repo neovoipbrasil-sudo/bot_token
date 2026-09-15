@@ -26,4 +26,12 @@ describe('audit-log', () => {
     log.logAction({ userId: 'u1', dialogId: 'd1', tool: 'crm_list', params: {}, result: {} });
     expect(log.readAll()).toHaveLength(1);
   });
+
+  it('preserves the error message when a failed action is logged', () => {
+    const log = createAuditLog(path.join(dir, 'audit.jsonl'));
+    log.logAction({ userId: 'u1', dialogId: 'd1', tool: 'generate_document', params: {}, result: 'error', error: 'disk.folder.uploadfile: acesso negado' });
+
+    const [entry] = log.readAll();
+    expect(entry.error).toBe('disk.folder.uploadfile: acesso negado');
+  });
 });
