@@ -84,6 +84,25 @@ describe('Bitrix24Client', () => {
     }
   });
 
+  it('retries on 502 Bad Gateway with the same backoff as 503', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/');
+
+      postMock
+        .mockRejectedValueOnce({ response: { status: 502 } })
+        .mockResolvedValueOnce({ data: { result: 'ok-after-502' } });
+
+      const promise = client.call('crm.lead.contact.items.get');
+      await vi.advanceTimersByTimeAsync(5000);
+
+      await expect(promise).resolves.toEqual({ result: 'ok-after-502' });
+      expect(postMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('paces requests using a custom minDelay when provided', async () => {
     const client = new Bitrix24Client('https://portal.bitrix24.com.br/rest/1/abc/', { minDelay: 1500 });
     expect(client.limiter.minDelay).toBe(1500);
