@@ -46,8 +46,10 @@ export class Bitrix24Client {
           // de contatos adicionais, indicando uma cota mais estrita (por
           // minuto, não só por segundo) do que a do rate limiter local.
           // Backoff bem mais longo que o do 429 para dar tempo dessa cota
-          // esvaziar antes de tentar de novo.
-          if (err.response?.status === 503 && retries < MAX_RETRIES) {
+          // esvaziar antes de tentar de novo. 502 (Bad Gateway) também
+          // apareceu em produção durante esse mesmo job — tratado igual,
+          // como falha transitória do lado do Bitrix.
+          if ((err.response?.status === 503 || err.response?.status === 502) && retries < MAX_RETRIES) {
             const backoff = Math.pow(2, retries) * 5000;
             await new Promise(r => setTimeout(r, backoff));
             retries += 1;

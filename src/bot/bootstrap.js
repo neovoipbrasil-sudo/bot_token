@@ -59,9 +59,22 @@ const msntalkAdditionalContactsIndex = createAdditionalContactsIndex({
 // 1.5s) — o refresh não é sensível a tempo, mas o tráfego em tempo real é.
 const additionalContactsRefreshClient = new Bitrix24Client(resolveWebhook(), { minDelay: 1500 });
 const ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-function runAdditionalContactsRefresh() {
-  refreshAdditionalContacts({ client: additionalContactsRefreshClient, index: msntalkAdditionalContactsIndex })
-    .catch((err) => console.error('msntalk: refreshAdditionalContacts failed', err));
+// Em produção, um ciclo completo passou a levar horas (cota do Bitrix
+// disputada com o tráfego real do webhook) — bem mais que os 30min do
+// intervalo. Sem essa guarda, cada novo "tick" do setInterval disparava
+// outra varredura por cima da anterior ainda em andamento, as duas
+// competindo pela mesma cota e falhando mais (seguidas de vários 502/503).
+let additionalContactsRefreshInFlight = false;
+async function runAdditionalContactsRefresh() {
+  if (additionalContactsRefreshInFlight) return;
+  additionalContactsRefreshInFlight = true;
+  try {
+    await refreshAdditionalContacts({ client: additionalContactsRefreshClient, index: msntalkAdditionalContactsIndex });
+  } catch (err) {
+    console.error('msntalk: refreshAdditionalContacts failed', err);
+  } finally {
+    additionalContactsRefreshInFlight = false;
+  }
 }
 runAdditionalContactsRefresh();
 setInterval(runAdditionalContactsRefresh, ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS);
