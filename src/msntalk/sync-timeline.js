@@ -1,4 +1,4 @@
-import { timelineAdd, timelineCommentUpdate, crmUpdate, crmCreate } from '../tools/crm.js';
+import { timelineAdd, timelineCommentUpdate, timelinePin, crmUpdate, crmCreate } from '../tools/crm.js';
 import { findCrmEntity } from './find-crm-entity.js';
 
 // Teto de mensagens guardadas por conversa — evita que o comentário cresça
@@ -139,6 +139,16 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
       } else {
         const { comment_id } = await timelineAdd({ entity: group.entity, entity_id: entityId, comment });
         newComments[key] = comment_id;
+        // Fixa o comentário recém-criado pra conversa do MSN Talk ficar
+        // visível no topo da timeline sem precisar abrir o histórico
+        // inteiro. Só na criação — uma vez fixado, o Bitrix mantém assim
+        // mesmo quando o conteúdo é atualizado depois. Erro aqui (ex: limite
+        // de itens fixados do Bitrix atingido) não deve derrubar o sync.
+        try {
+          await timelinePin({ id: comment_id, entity: group.entity, entity_id: entityId });
+        } catch (err) {
+          console.error('msntalk: timelinePin failed', err);
+        }
       }
 
       await crmUpdate({
