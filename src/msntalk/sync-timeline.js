@@ -13,6 +13,13 @@ const NEW_LEAD_TRIGGERS = [
   'Olá, vim pelo site e gostaria de mais informações.',
 ];
 
+// Mensagem de notificação de formulário preenchido (ex: anúncio de geração
+// de leads) — vem com uma frase fixa seguida de campos "Rótulo: valor", um
+// por linha, com os dados de quem preencheu. Usa startsWith (não igualdade
+// exata como NEW_LEAD_TRIGGERS) porque o texto completo varia conforme os
+// campos preenchidos no formulário.
+const FORM_SUBMISSION_TRIGGER = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.';
+
 // STATUS_ID da etapa "Inbound" no funil de Leads deste portal
 // (crm.status.list, ENTITY_ID=STATUS).
 const INBOUND_LEAD_STATUS_ID = 'UC_33H9R1';
@@ -27,6 +34,40 @@ async function createLeadFromSiteMessage(event) {
       STATUS_ID: INBOUND_LEAD_STATUS_ID,
     },
   });
+
+  return { entity: 'lead', entity_ids: [leadId] };
+}
+
+// Extrai os pares "Rótulo: valor" (um por linha) do corpo da mensagem de
+// formulário, ex.: "Email: fulano@ex.com" -> { Email: 'fulano@ex.com' }.
+function parseFormFields(text) {
+  const fields = {};
+  for (const line of text.split('\n')) {
+    const match = line.match(/^([^:]+):\s*(.+)$/);
+    if (match) fields[match[1].trim()] = match[2].trim();
+  }
+  return fields;
+}
+
+async function createLeadFromFormSubmission(event) {
+  const formFields = parseFormFields(event.text);
+  const fullName = formFields['Full name'] || event.contactName || 'Contato via formulário';
+  const [firstName, ...lastNameParts] = fullName.split(' ');
+  const phone = formFields['Phone number'] || event.phone;
+
+  const fields = {
+    TITLE: `Formulário — ${fullName}`,
+    NAME: firstName,
+    STATUS_ID: INBOUND_LEAD_STATUS_ID,
+    COMMENTS: event.text,
+    PHONE: [{ VALUE: phone, VALUE_TYPE: 'WORK' }],
+  };
+  if (lastNameParts.length > 0) fields.LAST_NAME = lastNameParts.join(' ');
+  if (formFields['Email']) fields.EMAIL = [{ VALUE: formFields['Email'], VALUE_TYPE: 'WORK' }];
+  if (formFields['Job title']) fields.POST = formFields['Job title'];
+  if (formFields['Company name']) fields.COMPANY_TITLE = formFields['Company name'];
+
+  const { created_id: leadId } = await crmCreate({ entity: 'lead', fields });
 
   return { entity: 'lead', entity_ids: [leadId] };
 }
@@ -72,14 +113,22 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
 export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
   let groups = await findCrmEntity(client, event.phone, additionalContactsIndex);
 
-  if (!groups && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
-    const created = await createLeadFromSiteMessage(event);
-    groups = [created];
-    auditLog.logAction({
-      tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: created.entity_ids[0] },
-      result: 'lead-created',
-    });
+  if (!groups) {
+    const trimmedText = event.text?.trim() ?? '';
+    let created = null;
+    if (NEW_LEAD_TRIGGERS.includes(trimmedText)) {
+      created = await createLeadFromSiteMessage(event);
+    } else if (trimmedText.startsWith(FORM_SUBMISSION_TRIGGER)) {
+      created = await createLeadFromFormSubmission(event);
+    }
+    if (created) {
+      groups = [created];
+      auditLog.logAction({
+        tool: 'msntalk-sync',
+        params: { phone: event.phone, ticketId: event.ticketId, entity_id: created.entity_ids[0] },
+        result: 'lead-created',
+      });
+    }
   }
 
   if (!groups) {

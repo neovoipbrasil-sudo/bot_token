@@ -340,6 +340,94 @@ describe('syncTimeline', () => {
     expect(crmCreateMock).not.toHaveBeenCalled();
   });
 
+  it('creates a Lead filling fields parsed from a form-submission message', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
+
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const formText = [
+      'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.',
+      '',
+      'Email: soniagarcia11695@gmail.com',
+      'Job title: Vendedora',
+      'Phone number: +5516997009192',
+      'Company name: Autônoma',
+      'Full name: Sonia Garcia',
+    ].join('\n');
+
+    const result = await syncTimeline({
+      event: baseEvent({ text: formText, phone: '5516997009192' }),
+      client: {},
+      auditLog,
+      threadStore,
+    });
+
+    expect(crmCreateMock).toHaveBeenCalledWith({
+      entity: 'lead',
+      fields: {
+        TITLE: 'Formulário — Sonia Garcia',
+        NAME: 'Sonia',
+        LAST_NAME: 'Garcia',
+        STATUS_ID: 'UC_33H9R1',
+        COMMENTS: formText,
+        PHONE: [{ VALUE: '+5516997009192', VALUE_TYPE: 'WORK' }],
+        EMAIL: [{ VALUE: 'soniagarcia11695@gmail.com', VALUE_TYPE: 'WORK' }],
+        POST: 'Vendedora',
+        COMPANY_TITLE: 'Autônoma',
+      },
+    });
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'lead', entity_ids: [9100] }] });
+    expect(auditLog.logAction).toHaveBeenCalledWith({
+      tool: 'msntalk-sync',
+      params: { phone: '5516997009192', ticketId: 92315, entity_id: 9100 },
+      result: 'lead-created',
+    });
+  });
+
+  it('falls back to the WhatsApp phone and contact name when the form message omits those fields', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9101 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const formText = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.\n\nEmail: foo@bar.com';
+
+    await syncTimeline({
+      event: baseEvent({ text: formText, contactName: 'Zeca' }),
+      client: {},
+      auditLog,
+      threadStore,
+    });
+
+    expect(crmCreateMock).toHaveBeenCalledWith({
+      entity: 'lead',
+      fields: {
+        TITLE: 'Formulário — Zeca',
+        NAME: 'Zeca',
+        STATUS_ID: 'UC_33H9R1',
+        COMMENTS: formText,
+        PHONE: [{ VALUE: '556121090177', VALUE_TYPE: 'WORK' }],
+        EMAIL: [{ VALUE: 'foo@bar.com', VALUE_TYPE: 'WORK' }],
+      },
+    });
+  });
+
+  it('does not create a Lead from a form-submission message when the phone already matches a CRM entity', async () => {
+    findCrmEntityMock.mockResolvedValueOnce([{ entity: 'lead', entity_ids: [111] }]);
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+
+    const result = await syncTimeline({
+      event: baseEvent({ text: 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.\n\nEmail: foo@bar.com' }),
+      client: {},
+      auditLog,
+      threadStore,
+    });
+
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'lead', entity_ids: [111] }] });
+    expect(crmCreateMock).not.toHaveBeenCalled();
+  });
+
   it('logs to the audit log and skips the timeline entirely when no CRM entity matches', async () => {
     findCrmEntityMock.mockResolvedValueOnce(null);
     const threadStore = makeThreadStore();
