@@ -170,3 +170,22 @@ export async function timelineCommentUpdate({ id, comment, webhook_url }) {
   await client.call('crm.timeline.comment.update', { id, fields: { COMMENT: comment } });
   return { portal: client.portal, id, success: true };
 }
+
+export const timelinePinSchema = z.object({
+  id: z.union([z.string(), z.number()]).describe('ID del comentario (devuelto por timelineAdd) a fijar en la línea de tiempo'),
+  entity: z.string().describe('Tipo de entidad CRM: deal, contact, company, lead'),
+  entity_id: z.union([z.string(), z.number()]).describe('ID del registro CRM'),
+  webhook_url: z.string().url().optional(),
+});
+
+// crm.timeline.item.pin pide ownerTypeId numérico (ver crm.enum.ownertype),
+// no el código de texto (lead/deal) que el resto de crm.timeline.* usa.
+const OWNER_TYPE_ID = { lead: 1, deal: 2, contact: 3, company: 4 };
+
+export async function timelinePin({ id, entity, entity_id, webhook_url }) {
+  const ownerTypeId = OWNER_TYPE_ID[entity?.toLowerCase()];
+  if (!ownerTypeId) throw new Error(`Entidad desconocida para timelinePin: "${entity}"`);
+  const client = new Bitrix24Client(resolveWebhook(webhook_url));
+  await client.call('crm.timeline.item.pin', { id, ownerTypeId, ownerId: entity_id });
+  return { portal: client.portal, id, success: true };
+}

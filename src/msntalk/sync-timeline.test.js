@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const findCrmEntityMock = vi.fn();
 const timelineAddMock = vi.fn().mockResolvedValue({ comment_id: 297878, success: true });
 const timelineCommentUpdateMock = vi.fn().mockResolvedValue({ success: true });
+const timelinePinMock = vi.fn().mockResolvedValue({ success: true });
 const crmUpdateMock = vi.fn().mockResolvedValue({ success: true });
 const crmCreateMock = vi.fn();
 
@@ -10,6 +11,7 @@ vi.mock('./find-crm-entity.js', () => ({ findCrmEntity: findCrmEntityMock }));
 vi.mock('../tools/crm.js', () => ({
   timelineAdd: timelineAddMock,
   timelineCommentUpdate: timelineCommentUpdateMock,
+  timelinePin: timelinePinMock,
   crmUpdate: crmUpdateMock,
   crmCreate: crmCreateMock,
 }));
@@ -45,6 +47,7 @@ describe('syncTimeline', () => {
     findCrmEntityMock.mockClear();
     timelineAddMock.mockClear();
     timelineCommentUpdateMock.mockClear();
+    timelinePinMock.mockClear();
     crmUpdateMock.mockClear();
     crmCreateMock.mockClear();
   });
@@ -63,6 +66,7 @@ describe('syncTimeline', () => {
       comment: '[MSN Talk] Ticket #92315\n\n[28/07 17:11] Maria Souza: Bom dia',
     });
     expect(timelineCommentUpdateMock).not.toHaveBeenCalled();
+    expect(timelinePinMock).toHaveBeenCalledWith({ id: 297878, entity: 'deal', entity_id: 555 });
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
       comments: { 'deal:555': 297878 },
       lines: ['[28/07 17:11] Maria Souza: Bom dia'],
@@ -73,6 +77,21 @@ describe('syncTimeline', () => {
       fields: { UF_CRM_LASTMSNTALK: TS },
     });
     expect(auditLog.logAction).not.toHaveBeenCalled();
+  });
+
+  it('does not let a timelinePin failure (e.g. Bitrix pin limit reached) break the sync', async () => {
+    findCrmEntityMock.mockResolvedValueOnce([{ entity: 'deal', entity_ids: [555] }]);
+    timelinePinMock.mockRejectedValueOnce(new Error('limite de itens fixados atingido'));
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+
+    const result = await syncTimeline({ event: baseEvent(), client: {}, auditLog, threadStore });
+
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'deal', entity_ids: [555] }] });
+    expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
+      comments: { 'deal:555': 297878 },
+      lines: ['[28/07 17:11] Maria Souza: Bom dia'],
+    });
   });
 
   it('falls back to "Cliente" when the ticket has no WhatsApp contact name', async () => {
@@ -108,6 +127,7 @@ describe('syncTimeline', () => {
       id: 297878,
       comment: '[MSN Talk] Ticket #92315\n\n[28/07 17:11] Maria Souza: Bom dia\n[28/07 17:13] SDR: Já te respondo',
     });
+    expect(timelinePinMock).not.toHaveBeenCalled();
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
       comments: { 'lead:111': 297878 },
       lines: ['[28/07 17:11] Maria Souza: Bom dia', '[28/07 17:13] SDR: Já te respondo'],
@@ -182,6 +202,8 @@ describe('syncTimeline', () => {
     expect(result).toEqual({ matched: true, groups: [{ entity: 'deal', entity_ids: [8876, 9696] }] });
     expect(timelineAddMock).toHaveBeenCalledWith(expect.objectContaining({ entity: 'deal', entity_id: 8876 }));
     expect(timelineAddMock).toHaveBeenCalledWith(expect.objectContaining({ entity: 'deal', entity_id: 9696 }));
+    expect(timelinePinMock).toHaveBeenCalledWith({ id: 111, entity: 'deal', entity_id: 8876 });
+    expect(timelinePinMock).toHaveBeenCalledWith({ id: 222, entity: 'deal', entity_id: 9696 });
     expect(crmUpdateMock).toHaveBeenCalledWith({ entity: 'deal', id: 8876, fields: { UF_CRM_LASTMSNTALK: TS } });
     expect(crmUpdateMock).toHaveBeenCalledWith({ entity: 'deal', id: 9696, fields: { UF_CRM_LASTMSNTALK: TS } });
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
@@ -202,6 +224,7 @@ describe('syncTimeline', () => {
     expect(timelineAddMock).not.toHaveBeenCalled();
     expect(timelineCommentUpdateMock).toHaveBeenCalledWith(expect.objectContaining({ id: 111 }));
     expect(timelineCommentUpdateMock).toHaveBeenCalledWith(expect.objectContaining({ id: 222 }));
+    expect(timelinePinMock).not.toHaveBeenCalled();
   });
 
   it('syncs to both an open lead and an open deal when the same contact has both at once', async () => {
@@ -225,6 +248,8 @@ describe('syncTimeline', () => {
     });
     expect(timelineAddMock).toHaveBeenCalledWith(expect.objectContaining({ entity: 'deal', entity_id: 7028 }));
     expect(timelineAddMock).toHaveBeenCalledWith(expect.objectContaining({ entity: 'lead', entity_id: 3118 }));
+    expect(timelinePinMock).toHaveBeenCalledWith({ id: 360620, entity: 'deal', entity_id: 7028 });
+    expect(timelinePinMock).toHaveBeenCalledWith({ id: 360701, entity: 'lead', entity_id: 3118 });
     expect(crmUpdateMock).toHaveBeenCalledWith({ entity: 'deal', id: 7028, fields: { UF_CRM_LASTMSNTALK: TS } });
     expect(crmUpdateMock).toHaveBeenCalledWith({ entity: 'lead', id: 3118, fields: { UF_CRM_LASTMSNTALK: TS } });
     expect(threadStore.saveThread).toHaveBeenCalledWith(92315, {
@@ -448,15 +473,17 @@ describe('syncTimeline', () => {
   });
 
   function makePendingStore(initial = {}) {
-    const data = { ...initial };
+    const data = {};
+    for (const [phone, lines] of Object.entries(initial)) data[phone] = { ticketId: null, lines };
     return {
-      appendPending: vi.fn((phone, line) => {
-        data[phone] = [...(data[phone] ?? []), line];
+      appendPending: vi.fn((phone, line, ticketId) => {
+        const lines = [...(data[phone]?.lines ?? []), line];
+        data[phone] = { ticketId: ticketId ?? null, lines };
       }),
       takePending: vi.fn((phone) => {
-        const lines = data[phone] ?? [];
+        const pending = data[phone] ?? { ticketId: null, lines: [] };
         delete data[phone];
-        return lines;
+        return pending;
       }),
     };
   }
@@ -472,6 +499,7 @@ describe('syncTimeline', () => {
     expect(pendingStore.appendPending).toHaveBeenCalledWith(
       '556121090177',
       '[28/07 17:11] Maria Souza: Bom dia',
+      92315,
     );
   });
 

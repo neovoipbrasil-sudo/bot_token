@@ -3,9 +3,11 @@ import path from 'path';
 
 // Guarda, por telefone, as linhas de mensagens que chegaram enquanto
 // findCrmEntity não encontrava nenhum lead/negócio aberto para elas
-// ("no-match"). Quando o telefone finalmente casar com um lead/negócio,
-// syncTimeline usa takePending para recuperar essas linhas e inseri-las
-// no início da timeline, em vez de perdê-las para sempre.
+// ("no-match"), junto com o ticketId mais recente em que isso aconteceu.
+// Quando o telefone finalmente casar com um lead/negócio — seja porque
+// chegou uma mensagem nova (syncTimeline) ou porque reconcile-pending.js
+// encontrou o match num ciclo periódico, sem esperar mensagem nova — essas
+// linhas são recuperadas e inseridas na timeline, em vez de perdidas.
 export function createPendingStore({ filePath }) {
   function ensureDir() {
     const dir = path.dirname(filePath);
@@ -22,25 +24,40 @@ export function createPendingStore({ filePath }) {
     writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
   }
 
+  // Registros antigos guardavam um array de linhas direto (sem ticketId).
+  // Normaliza pra sempre trabalhar com { ticketId, lines }.
+  function normalize(entry) {
+    if (!entry) return { ticketId: null, lines: [] };
+    if (Array.isArray(entry)) return { ticketId: null, lines: entry };
+    return { ticketId: entry.ticketId ?? null, lines: entry.lines ?? [] };
+  }
+
   return {
-    appendPending(phone, line) {
+    appendPending(phone, line, ticketId) {
       const data = load();
-      const lines = data[phone] ?? [];
+      const { lines } = normalize(data[phone]);
       lines.push(line);
-      data[phone] = lines;
+      data[phone] = { ticketId: ticketId ?? null, lines };
       persist(data);
     },
 
-    // Retorna as linhas pendentes do telefone e as remove do armazenamento —
-    // cada lote de mensagens perdidas só deve ser recuperado uma única vez.
+    // Retorna { ticketId, lines } com o que está pendente do telefone e
+    // remove do armazenamento — cada lote de mensagens perdidas só deve ser
+    // recuperado uma única vez.
     takePending(phone) {
       const data = load();
-      const lines = data[phone] ?? [];
-      if (lines.length > 0) {
+      const pending = normalize(data[phone]);
+      if (pending.lines.length > 0) {
         delete data[phone];
         persist(data);
       }
-      return lines;
+      return pending;
+    },
+
+    // Todos os telefones com algo pendente agora — usado por
+    // reconcile-pending.js para saber quais telefones reconsultar.
+    listPhones() {
+      return Object.keys(load());
     },
   };
 }

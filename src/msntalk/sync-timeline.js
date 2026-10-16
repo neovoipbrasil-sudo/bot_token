@@ -1,4 +1,4 @@
-import { timelineAdd, timelineCommentUpdate, crmUpdate, crmCreate } from '../tools/crm.js';
+import { timelineAdd, timelineCommentUpdate, timelinePin, crmUpdate, crmCreate } from '../tools/crm.js';
 import { findCrmEntity } from './find-crm-entity.js';
 
 // Teto de mensagens guardadas por conversa — evita que o comentário cresça
@@ -110,6 +110,67 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
   return parts.join('\n');
 }
 
+// Posta (cria ou atualiza) o mesmo comentário em todos os grupos/entity_ids
+// encontrados para um ticket, fixando comentários novos e salvando o thread
+// atualizado. Compartilhado entre syncTimeline (reage a mensagem nova) e
+// reconcile-pending.js (reage, sem mensagem nova, a um telefone pendente que
+// passou a bater com um lead/negócio — ex: alguém corrigiu o número no
+// contato). `onEntitySynced`, se passado, roda depois de cada entidade
+// sincronizada (syncTimeline usa pra atualizar UF_CRM_LASTMSNTALK; o
+// reconcile não tem uma mensagem "nova" com timestamp real pra isso).
+export async function postConversationToGroups({ groups, ticketId, lines, ticketUrlTemplate, threadStore, onEntitySynced }) {
+  const cappedLines = lines.slice(-MAX_LINES);
+
+  // Um contato pode ter vários negócios/leads abertos ao mesmo tempo — e, num
+  // caso real observado em produção, até um Lead E um Negócio abertos
+  // simultaneamente para o mesmo contato (ex: um Lead antigo nunca fechado
+  // depois que o Negócio foi criado) — então sincronizamos a mesma mensagem
+  // na timeline de TODOS os matches abertos, de todos os tipos, não só no
+  // primeiro.
+  const rawThread = threadStore.getThread(ticketId);
+  // Threads antigas guardavam um único commentId (de quando só existia um
+  // match por ticket, sempre do mesmo tipo); migramos preservando esse
+  // comentário para o primeiro entity_id da lista.
+  const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
+  const comments = rawThread?.comments ?? {};
+  const comment = buildCommentText({ ticketId, lines: cappedLines, ticketUrlTemplate });
+
+  const newComments = {};
+  let isFirstEntityOverall = true;
+  for (const group of groups) {
+    for (const entityId of group.entity_ids) {
+      // Chave composta "tipo:id" evita colisão entre um Lead e um Negócio
+      // com o mesmo ID numérico agora que os dois podem coexistir no mesmo
+      // ticket; comments[entityId] (chave antiga, sem o tipo) e
+      // legacyCommentId cobrem registros salvos antes dessa mudança.
+      const key = `${group.entity}:${entityId}`;
+      const existingCommentId = comments[key] ?? comments[entityId] ?? (isFirstEntityOverall ? legacyCommentId : null);
+      if (existingCommentId) {
+        await timelineCommentUpdate({ id: existingCommentId, comment });
+        newComments[key] = existingCommentId;
+      } else {
+        const { comment_id } = await timelineAdd({ entity: group.entity, entity_id: entityId, comment });
+        newComments[key] = comment_id;
+        // Fixa o comentário recém-criado pra conversa do MSN Talk ficar
+        // visível no topo da timeline sem precisar abrir o histórico
+        // inteiro. Só na criação — uma vez fixado, o Bitrix mantém assim
+        // mesmo quando o conteúdo é atualizado depois. Erro aqui (ex: limite
+        // de itens fixados do Bitrix atingido) não deve derrubar o sync.
+        try {
+          await timelinePin({ id: comment_id, entity: group.entity, entity_id: entityId });
+        } catch (err) {
+          console.error('msntalk: timelinePin failed', err);
+        }
+      }
+
+      if (onEntitySynced) await onEntitySynced(group.entity, entityId);
+      isFirstEntityOverall = false;
+    }
+  }
+
+  threadStore.saveThread(ticketId, { comments: newComments, lines: cappedLines });
+}
+
 export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
   let groups = await findCrmEntity(client, event.phone, additionalContactsIndex);
 
@@ -136,7 +197,7 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
     // ir pra timeline ainda, mas guardamos o texto: se esse telefone vier a
     // casar com um lead/negócio mais tarde (cadastro do número, mudança de
     // etapa etc.), syncTimeline recupera essas linhas em vez de perdê-las.
-    pendingStore?.appendPending(event.phone, buildLine(event));
+    pendingStore?.appendPending(event.phone, buildLine(event), event.ticketId);
     auditLog.logAction({
       tool: 'msntalk-sync',
       params: { phone: event.phone, ticketId: event.ticketId },
@@ -148,58 +209,30 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
   // Mensagens que ficaram pendentes desse telefone (de tickets anteriores ou
   // do início desse mesmo ticket, antes do match funcionar) entram no início
   // da timeline — recuperação única, feita só quando ainda há algo pendente.
-  const backfillLines = pendingStore?.takePending(event.phone) ?? [];
-  if (backfillLines.length > 0) {
+  const pending = pendingStore?.takePending(event.phone) ?? { lines: [] };
+  if (pending.lines.length > 0) {
     auditLog.logAction({
       tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: groups[0].entity_ids[0], recovered: backfillLines.length },
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: groups[0].entity_ids[0], recovered: pending.lines.length },
       result: 'backfill',
     });
   }
 
-  // Um contato pode ter vários negócios/leads abertos ao mesmo tempo — e, num
-  // caso real observado em produção, até um Lead E um Negócio abertos
-  // simultaneamente para o mesmo contato (ex: um Lead antigo nunca fechado
-  // depois que o Negócio foi criado) — então sincronizamos a mesma mensagem
-  // na timeline de TODOS os matches abertos, de todos os tipos, não só no
-  // primeiro.
   const rawThread = threadStore.getThread(event.ticketId);
-  // Threads antigas guardavam um único commentId (de quando só existia um
-  // match por ticket, sempre do mesmo tipo); migramos preservando esse
-  // comentário para o primeiro entity_id da lista.
-  const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
-  const comments = rawThread?.comments ?? {};
-  const lines = [...backfillLines, ...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
-  const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
+  const lines = [...pending.lines, ...(rawThread?.lines ?? []), buildLine(event)];
 
-  const newComments = {};
-  let isFirstEntityOverall = true;
-  for (const group of groups) {
-    for (const entityId of group.entity_ids) {
-      // Chave composta "tipo:id" evita colisão entre um Lead e um Negócio
-      // com o mesmo ID numérico agora que os dois podem coexistir no mesmo
-      // ticket; comments[entityId] (chave antiga, sem o tipo) e
-      // legacyCommentId cobrem registros salvos antes dessa mudança.
-      const key = `${group.entity}:${entityId}`;
-      const existingCommentId = comments[key] ?? comments[entityId] ?? (isFirstEntityOverall ? legacyCommentId : null);
-      if (existingCommentId) {
-        await timelineCommentUpdate({ id: existingCommentId, comment });
-        newComments[key] = existingCommentId;
-      } else {
-        const { comment_id } = await timelineAdd({ entity: group.entity, entity_id: entityId, comment });
-        newComments[key] = comment_id;
-      }
-
-      await crmUpdate({
-        entity: group.entity,
-        id: entityId,
-        fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
-      });
-      isFirstEntityOverall = false;
-    }
-  }
-
-  threadStore.saveThread(event.ticketId, { comments: newComments, lines });
+  await postConversationToGroups({
+    groups,
+    ticketId: event.ticketId,
+    lines,
+    ticketUrlTemplate,
+    threadStore,
+    onEntitySynced: (entity, entityId) => crmUpdate({
+      entity,
+      id: entityId,
+      fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
+    }),
+  });
 
   return { matched: true, groups };
 }
