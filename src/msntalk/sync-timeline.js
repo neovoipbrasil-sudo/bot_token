@@ -69,44 +69,16 @@ function buildCommentText({ ticketId, lines, ticketUrlTemplate }) {
   return parts.join('\n');
 }
 
-export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
-  let groups = await findCrmEntity(client, event.phone, additionalContactsIndex);
-
-  if (!groups && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
-    const created = await createLeadFromSiteMessage(event);
-    groups = [created];
-    auditLog.logAction({
-      tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: created.entity_ids[0] },
-      result: 'lead-created',
-    });
-  }
-
-  if (!groups) {
-    // Sem lead/negócio aberto pra esse telefone agora — a mensagem não pode
-    // ir pra timeline ainda, mas guardamos o texto: se esse telefone vier a
-    // casar com um lead/negócio mais tarde (cadastro do número, mudança de
-    // etapa etc.), syncTimeline recupera essas linhas em vez de perdê-las.
-    pendingStore?.appendPending(event.phone, buildLine(event));
-    auditLog.logAction({
-      tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId },
-      result: 'no-match',
-    });
-    return { matched: false };
-  }
-
-  // Mensagens que ficaram pendentes desse telefone (de tickets anteriores ou
-  // do início desse mesmo ticket, antes do match funcionar) entram no início
-  // da timeline — recuperação única, feita só quando ainda há algo pendente.
-  const backfillLines = pendingStore?.takePending(event.phone) ?? [];
-  if (backfillLines.length > 0) {
-    auditLog.logAction({
-      tool: 'msntalk-sync',
-      params: { phone: event.phone, ticketId: event.ticketId, entity_id: groups[0].entity_ids[0], recovered: backfillLines.length },
-      result: 'backfill',
-    });
-  }
+// Posta (cria ou atualiza) o mesmo comentário em todos os grupos/entity_ids
+// encontrados para um ticket, fixando comentários novos e salvando o thread
+// atualizado. Compartilhado entre syncTimeline (reage a mensagem nova) e
+// reconcile-pending.js (reage, sem mensagem nova, a um telefone pendente que
+// passou a bater com um lead/negócio — ex: alguém corrigiu o número no
+// contato). `onEntitySynced`, se passado, roda depois de cada entidade
+// sincronizada (syncTimeline usa pra atualizar UF_CRM_LASTMSNTALK; o
+// reconcile não tem uma mensagem "nova" com timestamp real pra isso).
+export async function postConversationToGroups({ groups, ticketId, lines, ticketUrlTemplate, threadStore, onEntitySynced }) {
+  const cappedLines = lines.slice(-MAX_LINES);
 
   // Um contato pode ter vários negócios/leads abertos ao mesmo tempo — e, num
   // caso real observado em produção, até um Lead E um Negócio abertos
@@ -114,14 +86,13 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
   // depois que o Negócio foi criado) — então sincronizamos a mesma mensagem
   // na timeline de TODOS os matches abertos, de todos os tipos, não só no
   // primeiro.
-  const rawThread = threadStore.getThread(event.ticketId);
+  const rawThread = threadStore.getThread(ticketId);
   // Threads antigas guardavam um único commentId (de quando só existia um
   // match por ticket, sempre do mesmo tipo); migramos preservando esse
   // comentário para o primeiro entity_id da lista.
   const legacyCommentId = rawThread && !rawThread.comments ? rawThread.commentId : null;
   const comments = rawThread?.comments ?? {};
-  const lines = [...backfillLines, ...(rawThread?.lines ?? []), buildLine(event)].slice(-MAX_LINES);
-  const comment = buildCommentText({ ticketId: event.ticketId, lines, ticketUrlTemplate });
+  const comment = buildCommentText({ ticketId, lines: cappedLines, ticketUrlTemplate });
 
   const newComments = {};
   let isFirstEntityOverall = true;
@@ -151,16 +122,68 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
         }
       }
 
-      await crmUpdate({
-        entity: group.entity,
-        id: entityId,
-        fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
-      });
+      if (onEntitySynced) await onEntitySynced(group.entity, entityId);
       isFirstEntityOverall = false;
     }
   }
 
-  threadStore.saveThread(event.ticketId, { comments: newComments, lines });
+  threadStore.saveThread(ticketId, { comments: newComments, lines: cappedLines });
+}
+
+export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate, threadStore, pendingStore, additionalContactsIndex }) {
+  let groups = await findCrmEntity(client, event.phone, additionalContactsIndex);
+
+  if (!groups && NEW_LEAD_TRIGGERS.includes(event.text?.trim())) {
+    const created = await createLeadFromSiteMessage(event);
+    groups = [created];
+    auditLog.logAction({
+      tool: 'msntalk-sync',
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: created.entity_ids[0] },
+      result: 'lead-created',
+    });
+  }
+
+  if (!groups) {
+    // Sem lead/negócio aberto pra esse telefone agora — a mensagem não pode
+    // ir pra timeline ainda, mas guardamos o texto: se esse telefone vier a
+    // casar com um lead/negócio mais tarde (cadastro do número, mudança de
+    // etapa etc.), syncTimeline recupera essas linhas em vez de perdê-las.
+    pendingStore?.appendPending(event.phone, buildLine(event), event.ticketId);
+    auditLog.logAction({
+      tool: 'msntalk-sync',
+      params: { phone: event.phone, ticketId: event.ticketId },
+      result: 'no-match',
+    });
+    return { matched: false };
+  }
+
+  // Mensagens que ficaram pendentes desse telefone (de tickets anteriores ou
+  // do início desse mesmo ticket, antes do match funcionar) entram no início
+  // da timeline — recuperação única, feita só quando ainda há algo pendente.
+  const pending = pendingStore?.takePending(event.phone) ?? { lines: [] };
+  if (pending.lines.length > 0) {
+    auditLog.logAction({
+      tool: 'msntalk-sync',
+      params: { phone: event.phone, ticketId: event.ticketId, entity_id: groups[0].entity_ids[0], recovered: pending.lines.length },
+      result: 'backfill',
+    });
+  }
+
+  const rawThread = threadStore.getThread(event.ticketId);
+  const lines = [...pending.lines, ...(rawThread?.lines ?? []), buildLine(event)];
+
+  await postConversationToGroups({
+    groups,
+    ticketId: event.ticketId,
+    lines,
+    ticketUrlTemplate,
+    threadStore,
+    onEntitySynced: (entity, entityId) => crmUpdate({
+      entity,
+      id: entityId,
+      fields: { [LAST_MESSAGE_FIELD]: event.timestamp },
+    }),
+  });
 
   return { matched: true, groups };
 }

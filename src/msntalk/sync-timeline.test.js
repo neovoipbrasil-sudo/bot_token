@@ -385,15 +385,17 @@ describe('syncTimeline', () => {
   });
 
   function makePendingStore(initial = {}) {
-    const data = { ...initial };
+    const data = {};
+    for (const [phone, lines] of Object.entries(initial)) data[phone] = { ticketId: null, lines };
     return {
-      appendPending: vi.fn((phone, line) => {
-        data[phone] = [...(data[phone] ?? []), line];
+      appendPending: vi.fn((phone, line, ticketId) => {
+        const lines = [...(data[phone]?.lines ?? []), line];
+        data[phone] = { ticketId: ticketId ?? null, lines };
       }),
       takePending: vi.fn((phone) => {
-        const lines = data[phone] ?? [];
+        const pending = data[phone] ?? { ticketId: null, lines: [] };
         delete data[phone];
-        return lines;
+        return pending;
       }),
     };
   }
@@ -409,6 +411,7 @@ describe('syncTimeline', () => {
     expect(pendingStore.appendPending).toHaveBeenCalledWith(
       '556121090177',
       '[28/07 17:11] Maria Souza: Bom dia',
+      92315,
     );
   });
 

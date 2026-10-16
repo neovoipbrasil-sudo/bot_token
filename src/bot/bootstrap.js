@@ -15,6 +15,7 @@ import { createThreadStore } from '../msntalk/thread-store.js';
 import { createPendingStore } from '../msntalk/pending-store.js';
 import { createAdditionalContactsIndex } from '../msntalk/additional-contacts-index.js';
 import { refreshAdditionalContacts } from '../msntalk/refresh-additional-contacts.js';
+import { reconcilePending } from '../msntalk/reconcile-pending.js';
 
 const PORT = process.env.BOT_PORT || 3300;
 
@@ -78,6 +79,36 @@ async function runAdditionalContactsRefresh() {
 }
 runAdditionalContactsRefresh();
 setInterval(runAdditionalContactsRefresh, ADDITIONAL_CONTACTS_REFRESH_INTERVAL_MS);
+
+// Reconsulta periodicamente os telefones com conversa pendente (sem match
+// ainda) — cobre, por exemplo, alguém corrigir/cadastrar o número no
+// contato depois que a conversa já tinha ficado pendente, sem precisar
+// esperar o cliente escrever de novo. Bem mais leve que o refresh de
+// contatos adicionais (só os telefones realmente pendentes, não todo
+// lead/negócio aberto do portal), então pode rodar bem mais seguido.
+const reconcilePendingClient = new Bitrix24Client(resolveWebhook(), { minDelay: 1000 });
+const RECONCILE_PENDING_INTERVAL_MS = 15 * 60 * 1000;
+let reconcilePendingInFlight = false;
+async function runReconcilePending() {
+  if (reconcilePendingInFlight) return;
+  reconcilePendingInFlight = true;
+  try {
+    await reconcilePending({
+      client: reconcilePendingClient,
+      pendingStore: msntalkPendingStore,
+      threadStore: msntalkThreadStore,
+      additionalContactsIndex: msntalkAdditionalContactsIndex,
+      ticketUrlTemplate: msntalkTicketUrlTemplate,
+      auditLog,
+    });
+  } catch (err) {
+    console.error('msntalk: reconcilePending failed', err);
+  } finally {
+    reconcilePendingInFlight = false;
+  }
+}
+runReconcilePending();
+setInterval(runReconcilePending, RECONCILE_PENDING_INTERVAL_MS);
 
 const app = createApp({
   botConfig,
