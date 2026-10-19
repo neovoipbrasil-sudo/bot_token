@@ -365,6 +365,20 @@ describe('syncTimeline', () => {
     expect(crmCreateMock).not.toHaveBeenCalled();
   });
 
+  function makeFormClient(duplicatesByType = {}) {
+    return {
+      call: vi.fn((method, params) => {
+        if (method === 'crm.duplicate.findbycomm') {
+          return Promise.resolve({ result: duplicatesByType[params.type] ?? {} });
+        }
+        if (method === 'crm.entity.mergeBatch') {
+          return Promise.resolve({ result: { STATUS: 'SUCCESS', ENTITY_IDS: [params.params.entityIds[1]] } });
+        }
+        return Promise.resolve({ result: {} });
+      }),
+    };
+  }
+
   it('creates a Lead filling fields parsed from a form-submission message', async () => {
     findCrmEntityMock.mockResolvedValueOnce(null);
     crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
@@ -383,7 +397,7 @@ describe('syncTimeline', () => {
 
     const result = await syncTimeline({
       event: baseEvent({ text: formText, phone: '5516997009192' }),
-      client: {},
+      client: makeFormClient(),
       auditLog,
       threadStore,
     });
@@ -419,7 +433,7 @@ describe('syncTimeline', () => {
 
     await syncTimeline({
       event: baseEvent({ text: formText, contactName: 'Zeca' }),
-      client: {},
+      client: makeFormClient(),
       auditLog,
       threadStore,
     });
@@ -435,6 +449,71 @@ describe('syncTimeline', () => {
         EMAIL: [{ VALUE: 'foo@bar.com', VALUE_TYPE: 'WORK' }],
       },
     });
+  });
+
+  it('merges the new lead into a pre-existing duplicate found by phone, keeping the pre-existing lead', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const client = makeFormClient({ PHONE: { LEAD: [500] } });
+    const formText = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.\n\nFull name: Sonia Garcia\nPhone number: +5516997009192';
+
+    const result = await syncTimeline({ event: baseEvent({ text: formText }), client, auditLog, threadStore });
+
+    expect(client.call).toHaveBeenCalledWith('crm.duplicate.findbycomm', { type: 'PHONE', values: ['+5516997009192'] });
+    expect(client.call).toHaveBeenCalledWith('crm.entity.mergeBatch', { params: { entityTypeId: 1, entityIds: [500, 9100] } });
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'lead', entity_ids: [500] }] });
+  });
+
+  it('merges the new lead into a pre-existing duplicate found by email', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const client = makeFormClient({ EMAIL: { LEAD: [777] } });
+    const formText = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.\n\nEmail: soniagarcia11695@gmail.com';
+
+    const result = await syncTimeline({ event: baseEvent({ text: formText }), client, auditLog, threadStore });
+
+    expect(client.call).toHaveBeenCalledWith('crm.entity.mergeBatch', { params: { entityTypeId: 1, entityIds: [777, 9100] } });
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'lead', entity_ids: [777] }] });
+  });
+
+  it('keeps the newly created lead when crm.entity.mergeBatch reports CONFLICT instead of merging automatically', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const client = {
+      call: vi.fn((method, params) => {
+        if (method === 'crm.duplicate.findbycomm') return Promise.resolve({ result: { LEAD: [500] } });
+        if (method === 'crm.entity.mergeBatch') return Promise.resolve({ result: { STATUS: 'CONFLICT' } });
+        return Promise.resolve({ result: {} });
+      }),
+    };
+    const formText = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.\n\nPhone number: +5516997009192';
+
+    const result = await syncTimeline({ event: baseEvent({ text: formText }), client, auditLog, threadStore });
+
+    expect(result).toEqual({ matched: true, groups: [{ entity: 'lead', entity_ids: [9100] }] });
+  });
+
+  it('does not search for duplicates when the form message has neither phone nor email to check', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9100 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const client = makeFormClient();
+
+    await syncTimeline({
+      event: baseEvent({ text: 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.', phone: '' }),
+      client,
+      auditLog,
+      threadStore,
+    });
+
+    expect(client.call).not.toHaveBeenCalledWith('crm.duplicate.findbycomm', expect.anything());
   });
 
   it('does not create a Lead from a form-submission message when the phone already matches a CRM entity', async () => {

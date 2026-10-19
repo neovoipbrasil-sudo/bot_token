@@ -49,11 +49,49 @@ function parseFormFields(text) {
   return fields;
 }
 
-async function createLeadFromFormSubmission(event) {
+// entityTypeId numérico que crm.entity.mergeBatch exige (ver crm.enum.ownertype) — 1 = Lead.
+const LEAD_ENTITY_TYPE_ID = 1;
+
+// findCrmEntity só descarta leads/negócios ABERTOS vinculados ao telefone —
+// um lead FECHADO (ex: formulário preenchido antes, que não avançou) do
+// mesmo telefone ou e-mail não é pego por ele, e criaríamos uma cópia do
+// mesmo jeito. Aqui buscamos qualquer lead (aberto ou não) com o mesmo
+// telefone ou e-mail do formulário pra mesclar em vez de duplicar.
+async function findDuplicateLeadId(client, { phone, email }, excludeLeadId) {
+  const leadIds = new Set();
+  for (const [type, value] of [['PHONE', phone], ['EMAIL', email]]) {
+    if (!value) continue;
+    const res = await client.call('crm.duplicate.findbycomm', { type, values: [value] });
+    for (const id of res.result?.LEAD ?? []) leadIds.add(String(id));
+  }
+  leadIds.delete(String(excludeLeadId));
+  return leadIds.size > 0 ? Number([...leadIds][0]) : null;
+}
+
+// Mescla o lead recém-criado num duplicado pré-existente (telefone ou
+// e-mail do formulário já tinham lead), em vez de deixar os dois separados.
+// crm.entity.mergeBatch: o PRIMEIRO id da lista sobrevive, os demais são
+// excluídos — por isso o duplicado pré-existente vem primeiro. Em caso de
+// CONFLICT (campos incompatíveis que o Bitrix não sabe resolver sozinho),
+// os dois leads continuam separados pra alguém mesclar manualmente na
+// interface do Bitrix; não bloqueia a sincronização.
+async function mergeIntoExistingLead(client, { existingLeadId, newLeadId }) {
+  const res = await client.call('crm.entity.mergeBatch', {
+    params: { entityTypeId: LEAD_ENTITY_TYPE_ID, entityIds: [existingLeadId, newLeadId] },
+  });
+  if (res.result?.STATUS !== 'SUCCESS') {
+    console.error('msntalk: crm.entity.mergeBatch não concluiu automaticamente (provável CONFLICT)', res.result);
+    return false;
+  }
+  return true;
+}
+
+async function createLeadFromFormSubmission(event, client) {
   const formFields = parseFormFields(event.text);
   const fullName = formFields['Full name'] || event.contactName || 'Contato via formulário';
   const [firstName, ...lastNameParts] = fullName.split(' ');
   const phone = formFields['Phone number'] || event.phone;
+  const email = formFields['Email'];
 
   const fields = {
     TITLE: `Formulário — ${fullName}`,
@@ -63,11 +101,17 @@ async function createLeadFromFormSubmission(event) {
     PHONE: [{ VALUE: phone, VALUE_TYPE: 'WORK' }],
   };
   if (lastNameParts.length > 0) fields.LAST_NAME = lastNameParts.join(' ');
-  if (formFields['Email']) fields.EMAIL = [{ VALUE: formFields['Email'], VALUE_TYPE: 'WORK' }];
+  if (email) fields.EMAIL = [{ VALUE: email, VALUE_TYPE: 'WORK' }];
   if (formFields['Job title']) fields.POST = formFields['Job title'];
   if (formFields['Company name']) fields.COMPANY_TITLE = formFields['Company name'];
 
   const { created_id: leadId } = await crmCreate({ entity: 'lead', fields });
+
+  const existingLeadId = await findDuplicateLeadId(client, { phone, email }, leadId);
+  if (existingLeadId) {
+    const merged = await mergeIntoExistingLead(client, { existingLeadId, newLeadId: leadId });
+    if (merged) return { entity: 'lead', entity_ids: [existingLeadId] };
+  }
 
   return { entity: 'lead', entity_ids: [leadId] };
 }
@@ -180,7 +224,7 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
     if (NEW_LEAD_TRIGGERS.includes(trimmedText)) {
       created = await createLeadFromSiteMessage(event);
     } else if (trimmedText.startsWith(FORM_SUBMISSION_TRIGGER)) {
-      created = await createLeadFromFormSubmission(event);
+      created = await createLeadFromFormSubmission(event, client);
     }
     if (created) {
       groups = [created];
