@@ -16,6 +16,8 @@ import { createPendingStore } from '../msntalk/pending-store.js';
 import { createAdditionalContactsIndex } from '../msntalk/additional-contacts-index.js';
 import { refreshAdditionalContacts } from '../msntalk/refresh-additional-contacts.js';
 import { reconcilePending } from '../msntalk/reconcile-pending.js';
+import { createReportUserStore } from '../reports/report-users.js';
+import { createReportsPanel } from '../reports/reports-panel.js';
 
 const PORT = process.env.BOT_PORT || 3300;
 
@@ -125,6 +127,12 @@ const app = createApp({
   msntalkPendingStore,
   msntalkAdditionalContactsIndex,
 });
+
+// Painel de relatórios com login (usuários em data/report-users.json; o primeiro acesso é
+// admin/admin com troca de senha obrigatória). Os relatórios são os .html gerados em REPORTS_DIR.
+const reportUserStore = createReportUserStore({ filePath: new URL('./data/report-users.json', import.meta.url).pathname });
+const reportsDir = process.env.REPORTS_DIR || new URL('./data/reports', import.meta.url).pathname;
+app.use('/reports', createReportsPanel({ userStore: reportUserStore, reportsDir }));
 
 app.listen(PORT, () => {
   console.log(`Bot Server escutando na porta ${PORT}`);
