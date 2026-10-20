@@ -23,6 +23,7 @@ function parseArgs(argv) {
     publicUrl: process.env.B24_REPORT_PUBLIC_URL || 'https://claude.ai/code/artifact/bd8798d6-ffff-4438-bc48-bf0c5f56a59c',
     usersFile: null,
     noAuth: false,
+    panel: false,
   };
   for (const a of argv) {
     const [k, v] = a.replace(/^--/, '').split('=');
@@ -36,8 +37,17 @@ function parseArgs(argv) {
     if (k === 'public-url') args.publicUrl = v;
     if (k === 'users-file') args.usersFile = v;
     if (k === 'no-auth') args.noAuth = true;
+    if (k === 'panel') args.panel = true;
   }
   if (!args.all && args.days === null && args.since === null) args.days = 30;
+  // --panel: relatório servido pelo painel /reports do bot, que já exige login. Sai sem criptografia,
+  // direto na pasta do painel, e os links de cliente usam o endereço do próprio painel.
+  if (args.panel) {
+    const reportsDir = process.env.REPORTS_DIR || path.join(__dirname, '..', 'bot', 'data', 'reports');
+    if (!argv.some((a) => a.startsWith('--out='))) args.out = path.join(reportsDir, 'helpdesk-report.html');
+    if (!argv.some((a) => a.startsWith('--public-url='))) args.publicUrl = '';
+    args.noAuth = true;
+  }
   return args;
 }
 
@@ -900,7 +910,7 @@ export function renderHelpDeskReportHtml({ rows, since, until, generatedAt, publ
 }
 
 async function main() {
-  const { all, days, since, until, out, otrs, publicUrl, usersFile, noAuth } = parseArgs(process.argv.slice(2));
+  const { all, days, since, until, out, otrs, publicUrl, usersFile, noAuth, panel } = parseArgs(process.argv.slice(2));
   // Falha antes de consultar o Bitrix24: o relatório só sai sem senha se isso for pedido explicitamente.
   const credentials = noAuth ? [] : loadCredentials({ usersFile });
   if (!noAuth && !credentials.length) {
@@ -922,7 +932,7 @@ async function main() {
   const html = noAuth ? report : protectHtml(report, credentials, { title: 'Relatório Help Desk' });
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, html);
-  const access = noAuth ? 'SEM proteção por senha' : `protegido para ${credentials.length} usuário(s)`;
+  const access = panel ? 'acesso pelo painel /reports' : noAuth ? 'SEM proteção por senha' : `protegido para ${credentials.length} usuário(s)`;
   console.log(`Relatório gerado: ${out} (${data.rows.length} tickets, ${access})`);
 }
 
