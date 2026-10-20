@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { Bitrix24Client } from '../bitrix24/client.js';
 import { resolveWebhook } from '../utils/resolve-webhook.js';
 import { loadOtrsTickets } from '../utils/parse-otrs-csv.js';
+import { loadCredentials, protectHtml } from './protect-html.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -20,6 +21,8 @@ function parseArgs(argv) {
     out: path.join(__dirname, '..', '..', 'reports', 'helpdesk-report.html'),
     otrs: path.join(__dirname, '..', '..', 'data', 'chamados-otrs.csv'),
     publicUrl: process.env.B24_REPORT_PUBLIC_URL || 'https://claude.ai/code/artifact/bd8798d6-ffff-4438-bc48-bf0c5f56a59c',
+    usersFile: null,
+    noAuth: false,
   };
   for (const a of argv) {
     const [k, v] = a.replace(/^--/, '').split('=');
@@ -31,6 +34,8 @@ function parseArgs(argv) {
     if (k === 'otrs') args.otrs = v;
     if (k === 'no-otrs') args.otrs = null;
     if (k === 'public-url') args.publicUrl = v;
+    if (k === 'users-file') args.usersFile = v;
+    if (k === 'no-auth') args.noAuth = true;
   }
   if (!args.all && args.days === null && args.since === null) args.days = 30;
   return args;
@@ -895,7 +900,15 @@ export function renderHelpDeskReportHtml({ rows, since, until, generatedAt, publ
 }
 
 async function main() {
-  const { all, days, since, until, out, otrs, publicUrl } = parseArgs(process.argv.slice(2));
+  const { all, days, since, until, out, otrs, publicUrl, usersFile, noAuth } = parseArgs(process.argv.slice(2));
+  // Falha antes de consultar o Bitrix24: o relatório só sai sem senha se isso for pedido explicitamente.
+  const credentials = noAuth ? [] : loadCredentials({ usersFile });
+  if (!noAuth && !credentials.length) {
+    throw new Error(
+      'Nenhuma credencial configurada. Defina B24_REPORT_USERS="usuario:senha,..." ou B24_REPORT_USERS_FILE / --users-file=<arquivo> ' +
+        '(uma linha usuario:senha por usuário). Use --no-auth para gerar o relatório sem proteção.'
+    );
+  }
   if (all) {
     console.log('Coletando todo o histórico de tickets do Help Desk...');
   } else if (since || until) {
@@ -905,10 +918,12 @@ async function main() {
   }
   if (otrs && fs.existsSync(otrs)) console.log(`Mesclando chamados externos (OTRS): ${otrs}`);
   const data = await collectHelpDeskReportData({ all, days, since, until, otrsPath: otrs });
-  const html = renderHelpDeskReportHtml({ ...data, publicUrl });
+  const report = renderHelpDeskReportHtml({ ...data, publicUrl });
+  const html = noAuth ? report : protectHtml(report, credentials, { title: 'Relatório Help Desk' });
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, html);
-  console.log(`Relatório gerado: ${out} (${data.rows.length} tickets)`);
+  const access = noAuth ? 'SEM proteção por senha' : `protegido para ${credentials.length} usuário(s)`;
+  console.log(`Relatório gerado: ${out} (${data.rows.length} tickets, ${access})`);
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
