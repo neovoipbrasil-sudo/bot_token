@@ -4,3 +4,4 @@ node_modules/
 /reports/
 src/bot/bot-config.json
 src/bot/data/
+/data/
