@@ -15,9 +15,10 @@ const NEW_LEAD_TRIGGERS = [
 
 // Mensagem de notificação de formulário preenchido (ex: anúncio de geração
 // de leads) — vem com uma frase fixa seguida de campos "Rótulo: valor", um
-// por linha, com os dados de quem preencheu. Usa startsWith (não igualdade
+// por linha, com os dados de quem preencheu. Usa includes (não igualdade
 // exata como NEW_LEAD_TRIGGERS) porque o texto completo varia conforme os
-// campos preenchidos no formulário.
+// campos preenchidos no formulário, e a frase pode vir precedida de outro
+// texto (ex: cabeçalho da plataforma de origem).
 const FORM_SUBMISSION_TRIGGER = 'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.';
 
 // STATUS_ID da etapa "Inbound" no funil de Leads deste portal
@@ -223,7 +224,7 @@ export async function syncTimeline({ event, client, auditLog, ticketUrlTemplate,
     let created = null;
     if (NEW_LEAD_TRIGGERS.includes(trimmedText)) {
       created = await createLeadFromSiteMessage(event);
-    } else if (trimmedText.startsWith(FORM_SUBMISSION_TRIGGER)) {
+    } else if (trimmedText.includes(FORM_SUBMISSION_TRIGGER)) {
       created = await createLeadFromFormSubmission(event, client);
     }
     if (created) {

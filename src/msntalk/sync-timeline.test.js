@@ -328,6 +328,31 @@ describe('syncTimeline', () => {
     });
   });
 
+  it('creates a form-submission Lead even when the trigger phrase is preceded by other text', async () => {
+    findCrmEntityMock.mockResolvedValueOnce(null);
+    crmCreateMock.mockResolvedValueOnce({ created_id: 9102 });
+    const threadStore = makeThreadStore();
+    const auditLog = { logAction: vi.fn() };
+    const formText = [
+      'Nova mensagem recebida via Facebook Ads:',
+      'Olá! Preenchi seu formulário e gostaria de saber mais sobre sua empresa.',
+      '',
+      'Full name: Sonia Garcia',
+    ].join('\n');
+
+    await syncTimeline({
+      event: baseEvent({ text: formText }),
+      client: makeFormClient(),
+      auditLog,
+      threadStore,
+    });
+
+    expect(crmCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+      entity: 'lead',
+      fields: expect.objectContaining({ TITLE: 'Formulário — Sonia Garcia' }),
+    }));
+  });
+
   it('does not create a Lead for an unmatched phone sending a message that only resembles the site trigger', async () => {
     findCrmEntityMock.mockResolvedValueOnce(null);
     const threadStore = makeThreadStore();
